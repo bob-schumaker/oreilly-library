@@ -3,13 +3,14 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] ISBN...
+    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--calibre] ISBN...
 
 Arguments:
     ISBN            Look for these books
 
 Options:
     --output-dir=OUTPUT Put the output files here. [Default: working/Books]
+    --calibre           Use version 2.0 in the OPF for Calibre compatibility.
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --browser=BROWSER   Browser to use for Selenium login. [Default: chrome]
     --verbose           Make some noise
@@ -41,6 +42,7 @@ class oreilly_loader:
     def __init__(
         self,
         isbns: Optional[Sequence[str]] = None,
+        calibre: bool = False,
         output_dir: Optional[str] = None,
         verbose: bool | None = None,
         debug: bool | None = None,
@@ -56,6 +58,7 @@ class oreilly_loader:
             raise ValueError("No ISBN identifiers provided.")
 
         self._identifiers = list(isbns)
+        self._calibre = calibre
         self._output_dir = output_dir
         self._verbose = bool(verbose)
         self._debug = bool(debug)
@@ -68,6 +71,15 @@ class oreilly_loader:
         self.session = requests.Session()
         cookie_data = self._ensure_cookies()
         self._apply_cookie_data(cookie_data)
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Referer": "https://learning.oreilly.com/login/unified/?next=/home/",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/90.0.4430.212 Safari/537.36",
+        }
+        self.session.headers.update(headers)
 
     def download_epub(self, identifier: str, output_dir: Optional[str] = None) -> None:
         """Use the EpubDownloaer class to fetch an epub."""
@@ -86,7 +98,7 @@ class oreilly_loader:
             verbose=self._verbose and not self._debug,
             debug=self._debug,
         )
-        downloader.download_and_build()
+        downloader.download_and_build(calibre=self._calibre)
 
     def run(self) -> int:
         if self._output_dir and not Path(self._output_dir).exists():
