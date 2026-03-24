@@ -65,11 +65,12 @@ class EpubBuilder:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def build_epub(self) -> Path:
+    def build_epub(self, calibre: bool = False) -> Path:
         """Build an EPUB file and return the resulting path."""
 
         self.warnings.clear()
         metadata = self._load_metadata()
+        opf_metadata = self._load_opf_metadata()
         identifier = metadata.get("identifier") or metadata.get("isbn")
         if not identifier:
             identifier = self.source_dir.name
@@ -78,10 +79,21 @@ class EpubBuilder:
                 identifier,
             )
 
+        # Yes, there must be a better way
+        categories = metadata.get("categories", [[]])[0]
+        if metadata.get("roughcut"):
+            categories.append("early release")
+
         title = metadata.get("title") or identifier
         language = metadata.get("language", "en")
         unique_id = metadata.get("opf_unique_identifier_type", "bookid")
         publication_date = metadata.get("publication_date")
+        authors = metadata.get("authors") or opf_metadata.get("authors", [])
+        publishers = opf_metadata.get("publishers", [])
+        description_html = None
+        descriptions = metadata.get("descriptions")
+        if isinstance(descriptions, dict):
+            description_html = descriptions.get("text/html")
 
         spine_items = self._resolve_spine()
         manifest_items, nav_id = self._build_manifest(spine_items)
@@ -99,9 +111,14 @@ class EpubBuilder:
                 title=title,
                 language=language,
                 publication_date=publication_date,
+                authors=authors,
+                publishers=publishers,
+                categories=categories,
+                description_html=description_html,
                 manifest_items=manifest_items,
                 spine_items=spine_items,
                 nav_id=nav_id,
+                version_id="2.0" if calibre else None,
             )
             archive.writestr("OEBPS/content.opf", opf_bytes)
 
@@ -190,6 +207,38 @@ class EpubBuilder:
             self._warn("No .xhtml files found in %s", text_dir)
         return files
 
+    def _load_opf_metadata(self) -> Dict[str, List[str]]:
+        """Extract author and publisher details from any OPF file present."""
+
+        authors: List[str] = []
+        publishers: List[str] = []
+        namespace = {"dc": "http://purl.org/dc/elements/1.1/"}
+
+        for opf_path in sorted(self.source_dir.rglob("*.opf")):
+            try:
+                tree = ET.parse(opf_path)
+                root = tree.getroot()
+            except ET.ParseError as exc:
+                self._warn("Failed to parse OPF file %s: %s", opf_path, exc)
+                continue
+
+            for creator_el in root.findall(".//dc:creator", namespace):
+                if creator_el.text:
+                    text = creator_el.text.strip()
+                    if text and text not in authors:
+                        authors.append(text)
+
+            for publisher_el in root.findall(".//dc:publisher", namespace):
+                if publisher_el.text:
+                    text = publisher_el.text.strip()
+                    if text and text not in publishers:
+                        publishers.append(text)
+
+            if authors or publishers:
+                break
+
+        return {"authors": authors, "publishers": publishers}
+
     def _build_manifest(
         self,
         spine_items: Sequence[Path],
@@ -221,7 +270,7 @@ class EpubBuilder:
         text_dir = self.source_dir / "text"
         if text_dir.exists():
             for path in sorted(text_dir.glob("*.xhtml")):
-                href = f"text/{path.name}"
+                href = path.name
                 props = "nav" if path.name.lower() == "nav.xhtml" else None
                 item_id = register(path, href, props)
                 if props == "nav":
@@ -229,11 +278,11 @@ class EpubBuilder:
         else:
             self._warn("Missing text directory at %s", text_dir)
 
-        styles_dir = self.source_dir / "styles"
+        styles_dir = self.source_dir / "Styles"
         if styles_dir.exists():
             for path in sorted(styles_dir.glob("*")):
                 if path.is_file():
-                    href = f"styles/{path.name}"
+                    href = f"Styles/{path.name}"
                     register(path, href)
         else:
             self._warn("Missing styles directory at %s", styles_dir)
@@ -245,18 +294,18 @@ class EpubBuilder:
                     href = f"fonts/{path.name}"
                     register(path, href)
 
-        images_dir = self.source_dir / "images"
+        images_dir = self.source_dir / "Images"
         if images_dir.exists():
             for path in sorted(images_dir.glob("*")):
                 if path.is_file():
-                    href = f"images/{path.name}"
+                    href = f"Images/{path.name}"
                     register(path, href)
         else:
             self._warn("Missing images directory at %s", images_dir)
 
         manifest_lookup = {item.href: item.item_id for item in manifest}
         for path in spine_items:
-            href = f"text/{path.name}"
+            href = path.name
             if href not in manifest_lookup:
                 item_id = register(path, href)
                 manifest_lookup[href] = item_id
@@ -310,9 +359,14 @@ class EpubBuilder:
         title: str,
         language: str,
         publication_date: Optional[str],
+        authors: Sequence[str],
+        publishers: Sequence[str],
+        categories: Sequence[str],
+        description_html: Optional[str],
         manifest_items: Sequence[ManifestItem],
         spine_items: Sequence[Path],
-        nav_id: Optional[str],
+        nav_id: str,
+        version_id: Optional[str] = None,
     ) -> bytes:
         ET.register_namespace("", "http://www.idpf.org/2007/opf")
         ET.register_namespace("dc", "http://purl.org/dc/elements/1.1/")
@@ -320,7 +374,7 @@ class EpubBuilder:
         package = ET.Element(
             "{http://www.idpf.org/2007/opf}package",
             attrib={
-                "version": "3.0",
+                "version": version_id or "3.0",
                 "unique-identifier": unique_id,
             },
         )
@@ -328,6 +382,10 @@ class EpubBuilder:
         metadata_el = ET.SubElement(
             package,
             "{http://www.idpf.org/2007/opf}metadata",
+            attrib={
+                "xmlns:dc": "http://purl.org/dc/elements/1.1/",
+                "xmlns:opf": "http://www.idpf.org/2007/opf",
+            },
         )
         ET.SubElement(
             metadata_el,
@@ -342,12 +400,34 @@ class EpubBuilder:
             metadata_el,
             "{http://purl.org/dc/elements/1.1/}language",
         ).text = language
+        for author in authors:
+            ET.SubElement(
+                metadata_el,
+                "{http://purl.org/dc/elements/1.1/}creator",
+                attrib={"opf:file-as": author, "opf:role": "aut"},
+            ).text = author
+        for subject in categories:
+            ET.SubElement(
+                metadata_el,
+                "{http://purl.org/dc/elements/1.1/}subject",
+            ).text = subject
+        for publisher in publishers:
+            ET.SubElement(
+                metadata_el,
+                "{http://purl.org/dc/elements/1.1/}publisher",
+            ).text = publisher
         if publication_date:
             ET.SubElement(
                 metadata_el,
                 "{http://purl.org/dc/elements/1.1/}date",
             ).text = publication_date
+        if description_html:
+            ET.SubElement(
+                metadata_el,
+                "dc:description",
+            ).text = description_html
 
+        cover_href = None
         manifest_el = ET.SubElement(
             package,
             "{http://www.idpf.org/2007/opf}manifest",
@@ -365,6 +445,8 @@ class EpubBuilder:
                 "{http://www.idpf.org/2007/opf}item",
                 attrib=attrib,
             )
+            if item.item_id == "cover":
+                cover_href = item.href
 
         manifest_lookup = {item.href: item.item_id for item in manifest_items}
 
@@ -374,7 +456,7 @@ class EpubBuilder:
         )
 
         for path in spine_items:
-            href = f"text/{path.name}"
+            href = path.name
             item_id = manifest_lookup.get(href)
             if not item_id:
                 self._warn("Spine item %s missing from manifest", href)
@@ -385,6 +467,13 @@ class EpubBuilder:
                 attrib={"idref": item_id},
             )
 
+        ET.SubElement(
+            metadata_el,
+            "{http://www.idpf.org/2007/opf}meta",
+            name="cover",
+            content="False",
+        )
+
         modified = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
         meta_el = ET.SubElement(
             metadata_el,
@@ -392,6 +481,18 @@ class EpubBuilder:
             attrib={"property": "dcterms:modified"},
         )
         meta_el.text = modified.isoformat().replace("+00:00", "Z")
+
+        # <guide><reference href="cover.xhtml" title="Cover" type="cover" /></guide>
+        if cover_href:
+            guide_el = ET.SubElement(
+                package,
+                "{http://www.idpf.org/2007/opf}guide",
+            )
+            ET.SubElement(
+                guide_el,
+                "{http://www.idpf.org/2007/opf}reference",
+                attrib={"href": cover_href, "title": "Cover", "type": "cover"},
+            )
 
         return ET.tostring(package, encoding="utf-8", xml_declaration=True)
 
@@ -560,7 +661,9 @@ class EpubBuilder:
         return normalized.encode("utf-8")
 
     def _manifest_id_from_href(self, href: str) -> str:
-        base = href.replace("/", "_").replace(".", "_")
+        base = Path(href).stem
+        if "Images" in href:
+            base = "img_" + base
         sanitized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in base)
         while sanitized.startswith("_"):
             sanitized = sanitized[1:]
