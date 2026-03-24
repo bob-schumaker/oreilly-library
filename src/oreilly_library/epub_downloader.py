@@ -7,18 +7,23 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Mapping, MutableMapping, Optional
+from typing import Any, Iterator, Mapping, MutableMapping, Optional
 
 from requests import Session
 
 from oreilly_library.epub_builder import EpubBuilder
 
 EPUB_METADATA_URL = (
-    "https://learning.oreilly.com/api/v2/epubs/urn:orm:book:{identifier}/"
+    "https://learning.oreilly.com/api/v2/metadata/?identifier={identifier}"
 )
+EPUB_API_URL = "https://learning.oreilly.com/api/v2/epubs/urn:orm:book:{identifier}/"
 EPUB_CHAPTERS_URL = (
     "https://learning.oreilly.com/api/v2/epub-chapters/"
     "?epub_identifier=urn:orm:book:{identifier}"
+)
+EPUB_CHAPTERS_URL = (
+    "https://learning.oreilly.com/search/api/search/"
+    "?q={identifier}&type=article&type=book&type=shortcut&rows=100&language=en&language=ja&feature_flags=improveSearchFilters&tzOffset=8&aia_only=false&report=true&isTopics=false"
 )
 
 
@@ -76,50 +81,42 @@ class EpubDownloader:
             The directory containing the downloaded assets.
         """
 
-        self._log_info("Starting download for %s", self.identifier)
-        self._log_debug("Download destination resolved to %s", self.destination)
-        self.destination.mkdir(parents=True, exist_ok=True)
-
-        metadata_path = self.destination / f"{self.identifier}.json"
-        if metadata_path.exists():
-            self._log_info("Loading cached metadata from %s", metadata_path)
-            with metadata_path.open("r", encoding="utf-8") as handle:
-                metadata = json.load(handle)
-        else:
-            self._log_info("Fetching metadata from %s", self._metadata_url)
-            metadata = self._fetch_json(self._metadata_url)
-
-        self._ensure_named_destination(metadata)
+        self._log_info("Fetching metadata from %s", self._metadata_url)
+        book_info = self.fetch_bookinfo()
+        self._ensure_named_destination(book_info)
         metadata_path = self.destination / f"{self.identifier}.json"
         if not metadata_path.exists():
             self._log_debug("Persisting metadata to %s", metadata_path)
-            self._write_json(metadata, metadata_path)
+            self._write_json(book_info, metadata_path)
 
         self._log_info("Downloading related documents")
-        self._download_related_documents(metadata)
+        self._download_related_documents(book_info)
         self._log_info("Aggregating chapter data")
         self._download_chapters()
         self._log_info("Downloading additional files")
-        self._download_files(metadata)
+        self._download_files(book_info)
 
         self._log_info("Completed download for %s", self.identifier)
 
         return self.destination
 
-    def download_and_build(self) -> DownloadResult:
+    def download_and_build(self, calibre: bool = False) -> DownloadResult:
         """Download assets and immediately build an EPUB archive."""
-
         source_dir = self.download()
         self._log_info("Building EPUB archive for %s", self.identifier)
         self._log_debug("Creating EpubBuilder for %s", source_dir)
         builder = EpubBuilder(source_dir)
-        epub_path = builder.build_epub()
+        epub_path = builder.build_epub(calibre=calibre)
         self._log_info("Finished building EPUB archive at %s", epub_path)
         return DownloadResult(source_dir=source_dir, epub_path=epub_path)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    @property
+    def _main_api_url(self) -> str:
+        return EPUB_API_URL.format(identifier=self.identifier)
+
     @property
     def _metadata_url(self) -> str:
         return EPUB_METADATA_URL.format(identifier=self.identifier)
@@ -128,7 +125,16 @@ class EpubDownloader:
     def _chapters_url(self) -> str:
         return EPUB_CHAPTERS_URL.format(identifier=self.identifier)
 
-    def _download_related_documents(self, metadata: Mapping[str, object]) -> None:
+    def fetch_bookinfo(self) -> MutableMapping[str, Any]:
+        """Get the book metadata."""
+        book_info = self._fetch_json(self._main_api_url)
+        metadata = self._fetch_json(self._metadata_url)
+        results = metadata.get("results")
+        if results:
+            book_info.update(results[0])
+        return book_info
+
+    def _download_related_documents(self, metadata: Mapping[str, Any]) -> None:
         related_endpoints = {
             "spine": "spine.json",
             "table_of_contents": "toc.json",
@@ -154,7 +160,7 @@ class EpubDownloader:
                 "Skipping chapters download; %s already exists", chapters_path
             )
             return
-        aggregated: MutableMapping[str, object] | None = None
+        aggregated: MutableMapping[str, Any] | None = None
         for page in self._iterate_paginated(self._chapters_url):
             self._log_debug("Processing chapters page with keys: %s", list(page.keys()))
             if aggregated is None:
@@ -178,10 +184,10 @@ class EpubDownloader:
         self._log_debug("Writing aggregated chapters to %s", chapters_path)
         self._write_json(aggregated, chapters_path)
 
-    def _download_files(self, metadata: Mapping[str, object]) -> None:
+    def _download_files(self, metadata: Mapping[str, Any]) -> None:
         files_url = metadata.get("files")
         if not isinstance(files_url, str):
-            files_url = f"{self._metadata_url}files/"
+            files_url = f"{self._main_api_url}files/"
 
         for page in self._iterate_paginated(files_url):
             self._log_debug("Processing files page from %s", files_url)
@@ -190,7 +196,7 @@ class EpubDownloader:
                 for item in results:
                     self._download_file_entry(item)
 
-    def _download_file_entry(self, item: Mapping[str, object]) -> None:
+    def _download_file_entry(self, item: Mapping[str, Any]) -> None:
         path = self._extract_path(item)
         url = self._extract_url(item)
         if not path or not url:
@@ -326,7 +332,7 @@ class EpubDownloader:
     # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
-    def _fetch_json(self, url: str) -> MutableMapping[str, object]:
+    def _fetch_json(self, url: str) -> MutableMapping[str, Any]:
         self._log_debug("GET %s", url)
         response = self.session.get(url)
         response.raise_for_status()
@@ -338,7 +344,7 @@ class EpubDownloader:
         response.raise_for_status()
         return response.content
 
-    def _iterate_paginated(self, url: str) -> Iterator[MutableMapping[str, object]]:
+    def _iterate_paginated(self, url: str) -> Iterator[MutableMapping[str, Any]]:
         next_url: Optional[str] = url
         while next_url:
             page = self._fetch_json(next_url)
@@ -366,7 +372,7 @@ class EpubDownloader:
                 return Path(candidate)
         return None
 
-    def _extract_url(self, item: Mapping[str, object]) -> Optional[str]:
+    def _extract_url(self, item: Mapping[str, Any]) -> Optional[str]:
         for key in ("url", "href", "download_url", "content_url"):
             value = item.get(key)
             if isinstance(value, str) and value:
@@ -390,16 +396,16 @@ class EpubDownloader:
             ".tiff",
             ".ico",
         }:
-            subdir = "images"
+            subdir = "Images"
         elif suffix == ".css":
-            subdir = "styles"
+            subdir = "Styles"
         else:
             subdir = "text"
 
         return self.destination / subdir / original.name
 
-    def _ensure_named_destination(self, metadata: Mapping[str, object]) -> None:
-        title = metadata.get("title")
+    def _ensure_named_destination(self, metadata: Mapping[str, Any]) -> None:
+        title = metadata.get("name")
         if not isinstance(title, str) or not title.strip():
             return
 
@@ -414,18 +420,10 @@ class EpubDownloader:
         if desired_path == self.destination:
             return
 
-        if desired_path.exists():
-            if self.destination.exists():
-                try:
-                    next(self.destination.iterdir())
-                except StopIteration:
-                    self.destination.rmdir()
-            self.destination = desired_path
-            return
-
-        if self.destination.exists():
-            self.destination.rename(desired_path)
+        if not desired_path.exists() and self.destination.exists():
+            self.destination.rmdir()
         self.destination = desired_path
+        self._log_debug("Download destination resolved to %s", self.destination)
 
     def _sanitize_directory_name(self, name: str) -> str:
         sanitized = re.sub(r"[\\/:*?\"<>|]", "_", name)
