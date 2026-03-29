@@ -3,7 +3,7 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--calibre] ISBN...
+    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--calibre] [--login] ISBN...
 
 Arguments:
     ISBN            Look for these books
@@ -13,6 +13,7 @@ Options:
     --calibre           Use version 2.0 in the OPF for Calibre compatibility.
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --browser=BROWSER   Browser to use for Selenium login. [Default: chrome]
+    --login             Force Selenium login to refresh cookies.
     --verbose           Make some noise
     --debug             Make a lot of noise
 """
@@ -48,6 +49,7 @@ class oreilly_loader:
         debug: bool | None = None,
         cookie_file: Optional[str] = None,
         browser: str | None = None,
+        login: bool | None = None,
         **kwargs,
     ) -> None:
         if isinstance(isbns, str):
@@ -68,6 +70,7 @@ class oreilly_loader:
             cookie_file or cookies_env or os.path.join(PATH, "cookies.json")
         )
         self._browser = (browser or "chrome").lower()
+        self._force_login = bool(login)
         self.session = requests.Session()
         cookie_data = self._ensure_cookies()
         self._apply_cookie_data(cookie_data)
@@ -112,6 +115,14 @@ class oreilly_loader:
         return 0
 
     def _ensure_cookies(self) -> list[dict] | dict:
+        if self._force_login:
+            self.logger.info(
+                "--login flag supplied. Launching Selenium to refresh cookies.",
+            )
+            cookie_data = self._collect_cookies_with_selenium(self._cookies_file)
+            self._persist_cookies(cookie_data, self._cookies_file)
+            return cookie_data
+
         if self._cookies_file.exists():
             return self._load_cookies_from_file(self._cookies_file)
         cookie_data = self._collect_cookies_with_selenium(self._cookies_file)

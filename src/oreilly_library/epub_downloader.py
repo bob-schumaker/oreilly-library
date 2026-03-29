@@ -400,7 +400,7 @@ class EpubDownloader:
         elif suffix == ".css":
             subdir = "Styles"
         else:
-            subdir = "text"
+            subdir = "xhtml"
 
         return self.destination / subdir / original.name
 

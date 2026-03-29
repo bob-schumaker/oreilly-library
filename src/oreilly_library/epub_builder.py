@@ -167,7 +167,7 @@ class EpubBuilder:
 
     def _resolve_spine(self) -> List[Path]:
         spine_path = self.source_dir / "spine.json"
-        text_dir = self.source_dir / "text"
+        text_dir = self.source_dir / "xhtml"
         if spine_path.exists():
             try:
                 with spine_path.open("r", encoding="utf-8") as handle:
@@ -189,11 +189,12 @@ class EpubBuilder:
                         )
                 if resolved:
                     resolved_set = {path.resolve() for path in resolved}
-                    for path in sorted(text_dir.glob("*.xhtml")):
-                        candidate = path.resolve()
-                        if candidate not in resolved_set:
-                            resolved.append(path)
-                            resolved_set.add(candidate)
+                    for html_ext in ("html", "xhtml"):
+                        for path in sorted(text_dir.glob(f"*.{html_ext}")):
+                            candidate = path.resolve()
+                            if candidate not in resolved_set:
+                                resolved.append(path)
+                                resolved_set.add(candidate)
                     return resolved
             except Exception as exc:  # pragma: no cover - defensive
                 self._warn("Unable to parse spine.json: %s", exc)
@@ -202,9 +203,11 @@ class EpubBuilder:
             self._warn("Missing text directory at %s", text_dir)
             return []
 
-        files = sorted(text_dir.glob("*.xhtml"))
+        files = sorted(
+            path for pattern in ("*.xhtml", "*.html") for path in text_dir.glob(pattern)
+        )
         if not files:
-            self._warn("No .xhtml files found in %s", text_dir)
+            self._warn("No HTML or XHTML files found in %s", text_dir)
         return files
 
     def _load_opf_metadata(self) -> Dict[str, List[str]]:
@@ -267,14 +270,15 @@ class EpubBuilder:
             self._manifest_ids.add(item_id)
             return item_id
 
-        text_dir = self.source_dir / "text"
+        text_dir = self.source_dir / "xhtml"
         if text_dir.exists():
-            for path in sorted(text_dir.glob("*.xhtml")):
-                href = path.name
-                props = "nav" if path.name.lower() == "nav.xhtml" else None
-                item_id = register(path, href, props)
-                if props == "nav":
-                    nav_id = item_id
+            for html_ext in ("html", "xhtml"):
+                for path in sorted(text_dir.glob(f"*.{html_ext}")):
+                    href = f"xhtml/{path.name}"
+                    props = "nav" if path.name.lower() == "nav.{html_ext}" else None
+                    item_id = register(path, href, props)
+                    if props == "nav":
+                        nav_id = item_id
         else:
             self._warn("Missing text directory at %s", text_dir)
 
@@ -305,7 +309,10 @@ class EpubBuilder:
 
         manifest_lookup = {item.href: item.item_id for item in manifest}
         for path in spine_items:
-            href = path.name
+            try:
+                href = path.relative_to(self.source_dir).as_posix()
+            except ValueError:
+                href = path.name
             if href not in manifest_lookup:
                 item_id = register(path, href)
                 manifest_lookup[href] = item_id
@@ -350,6 +357,93 @@ class EpubBuilder:
             "</container>"
         )
         archive.writestr("META-INF/container.xml", container_xml)
+
+    def _render_cover_xhtml(
+        self,
+        *,
+        identifier: str,
+        image_href: str,
+        image_alt: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> str:
+        """Render a normalized cover.xhtml document.
+
+        Parameters
+        ----------
+        identifier:
+            The book identifier used to rewrite hosted asset URLs.
+        image_href:
+            Path to the cover image relative to the ``Images/`` directory or an
+            absolute URL provided in the raw content.
+        image_alt:
+            Optional accessibility description for the cover image. If omitted,
+            the alt text will fall back to a simple "Cover image" placeholder.
+        width / height:
+            Optional intrinsic image dimensions.
+        """
+
+        def _rewrite_href(href: str) -> str:
+            api_pattern = re.compile(
+                rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+                re.IGNORECASE,
+            )
+            root_pattern = re.compile(
+                rf"/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+                re.IGNORECASE,
+            )
+
+            cleaned = api_pattern.sub("", href)
+            cleaned = root_pattern.sub("", cleaned)
+            return cleaned
+
+        normalized_href = _rewrite_href(image_href)
+        normalized_href = normalized_href.strip()
+        if normalized_href.lower().startswith("images/"):
+            normalized_href = normalized_href[7:]
+        elif normalized_href != "":
+            normalized_href = Path(normalized_href).name
+
+        if not normalized_href:
+            normalized_href = "cover.jpg"
+
+        normalized_href = f"Images/{normalized_href}"
+
+        alt_text = image_alt.strip() if image_alt else "Cover image"
+
+        img_attrs = [
+            'aria-label="cover"',
+            'role="doc-cover"',
+            'class="imagefp"',
+            f'src="{html.escape(normalized_href)}"',
+            f'alt="{html.escape(alt_text)}"',
+        ]
+        if width:
+            img_attrs.append(f'width="{width}"')
+        if height:
+            img_attrs.append(f'height="{height}"')
+
+        img_tag = "<img " + " ".join(img_attrs) + " />"
+
+        cover_markup = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml" '
+            'xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">\n'
+            "<head>\n"
+            '<meta charset="utf-8" />\n'
+            "<title>Cover</title>\n"
+            "</head>\n"
+            "<body>\n"
+            '<div id="sbo-rt-content" class="cover-pg">\n'
+            '<figure class="ipadfp">'
+            '<span role="doc-pagebreak" id="pgi" aria-label="i"></span>'
+            f"{img_tag}"
+            "</figure>\n"
+            "</div>\n"
+            "</body>\n"
+            "</html>\n"
+        )
+        return cover_markup
 
     def _render_content_opf(
         self,
@@ -456,7 +550,10 @@ class EpubBuilder:
         )
 
         for path in spine_items:
-            href = path.name
+            try:
+                href = path.relative_to(self.source_dir).as_posix()
+            except ValueError:
+                href = path.name
             item_id = manifest_lookup.get(href)
             if not item_id:
                 self._warn("Spine item %s missing from manifest", href)
@@ -505,6 +602,9 @@ class EpubBuilder:
             return content
 
         text = text.replace("\r\n", "\n")
+
+        if Path(href).stem.lower() == "cover":
+            return self._normalize_cover(text, identifier)
 
         stripped = text.lstrip()
         xml_decl = ""
@@ -659,6 +759,51 @@ class EpubBuilder:
 
         normalized = f"{xml_decl}\n{text_body.lstrip()}"
         return normalized.encode("utf-8")
+
+    def _normalize_cover(self, text: str, identifier: str) -> bytes:
+        """Transform arbitrary cover markup into a standard cover.xhtml body."""
+
+        img_match = re.search(r"<img\b[^>]*>", text, re.IGNORECASE)
+        if img_match:
+            img_tag = img_match.group(0)
+        else:
+            img_tag = ""
+
+        attr_pattern = re.compile(
+            r"([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(\"[^\"]*\"|'[^']*')"
+        )
+        attrs = {
+            name.lower(): value[1:-1] for name, value in attr_pattern.findall(img_tag)
+        }
+
+        src = attrs.get("src", "")
+        alt = attrs.get("alt")
+        width = attrs.get("width")
+        height = attrs.get("height")
+
+        def _to_int(value: Optional[str]) -> Optional[int]:
+            if not value:
+                return None
+            value = value.strip()
+            value = re.sub(r"[^0-9]", "", value)
+            if not value:
+                return None
+            try:
+                return int(value)
+            except ValueError:
+                return None
+
+        width_int = _to_int(width)
+        height_int = _to_int(height)
+
+        markup = self._render_cover_xhtml(
+            identifier=identifier,
+            image_href=src,
+            image_alt=alt,
+            width=width_int,
+            height=height_int,
+        )
+        return markup.encode("utf-8")
 
     def _manifest_id_from_href(self, href: str) -> str:
         base = Path(href).stem
