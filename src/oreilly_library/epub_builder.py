@@ -21,10 +21,11 @@ import posixpath
 import re
 import shutil
 import subprocess
+import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, Union
 from urllib.parse import urlsplit, urlunsplit
 from zipfile import ZIP_STORED, ZipFile
 
@@ -183,9 +184,22 @@ class EpubBuilder:
         if description_html:
             book.add_metadata("DC", "description", description_html)
 
-        for index, author in enumerate(authors, start=1):
-            uid = "creator" if index == 1 else f"creator_{index}"
-            book.add_author(author, file_as=author, role="aut", uid=uid)
+        authors = [
+            normalized
+            for author in authors
+            if (normalized := self._normalize_author_name(author))
+        ]
+        multi_author_file_as = (
+            self._combined_author_file_as(authors) if len(authors) > 1 else None
+        )
+        author_ids = self._author_ids(authors)
+        for author, uid in zip(authors, author_ids):
+            book.add_author(
+                author,
+                file_as=multi_author_file_as or self._author_sort_name(author),
+                role="aut",
+                uid=uid,
+            )
 
         for publisher in publishers:
             book.add_metadata("DC", "publisher", publisher)
@@ -359,12 +373,7 @@ class EpubBuilder:
     ) -> list[str]:
         authors: list[str] = []
 
-        raw_authors = metadata.get("authors")
-        if isinstance(raw_authors, list):
-            authors.extend(item for item in raw_authors if isinstance(item, str))
-        elif isinstance(raw_authors, str):
-            authors.append(raw_authors)
-
+        authors = self._cleanup_authors(metadata.get("authors"))
         talent = metadata.get("talent")
         if isinstance(talent, dict):
             contributors = talent.get("contributors")
@@ -374,12 +383,29 @@ class EpubBuilder:
                         continue
                     if contributor.get("contributor_type") != "author":
                         continue
-                    name = self._as_non_empty_str(contributor.get("name"))
+                    name = self._normalize_author_name(contributor.get("name"))
                     if name:
                         authors.append(name)
+        authors.extend(self._cleanup_authors(opf_metadata.get("authors")))
 
-        authors.extend(opf_metadata.get("authors", []))
-        return self._unique_strings(authors)
+        return self._strip_aggregate_author_entries(self._unique_strings(authors))
+
+    def _cleanup_authors(
+        self, authors: Optional[Union[str, Iterable[str]]]
+    ) -> List[str]:
+        """Deal with author lists in various formats."""
+        if not authors:
+            return []
+        if isinstance(authors, str):
+            authors = authors.split(",")
+        results = []
+        if isinstance(authors, list):
+            for entry in authors:
+                for author in [
+                    aut.replace("and", "").strip() for aut in entry.split(",")
+                ]:
+                    results.append(self._normalize_author_name(author))
+        return results
 
     def _extract_publishers(
         self,
@@ -418,7 +444,7 @@ class EpubBuilder:
 
             for creator_el in root.findall(".//dc:creator", namespace):
                 if creator_el.text:
-                    text = creator_el.text.strip()
+                    text = self._normalize_author_name(creator_el.text)
                     if text and text not in authors:
                         authors.append(text)
 
@@ -1712,9 +1738,6 @@ class EpubBuilder:
         calibre: bool,
         removed_members: set[str],
     ) -> bytes:
-        if not calibre:
-            return data
-
         try:
             root = ET.fromstring(data)
         except ET.ParseError:
@@ -1726,6 +1749,17 @@ class EpubBuilder:
         ET.register_namespace("dc", dc_ns)
         ET.register_namespace("opf", opf_ns)
 
+        metadata = root.find(f"{{{opf_ns}}}metadata")
+        if metadata is not None:
+            self._apply_legacy_creator_attributes(
+                metadata,
+                opf_namespace=opf_ns,
+                dc_namespace=dc_ns,
+            )
+
+        if not calibre:
+            return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
         removed_hrefs = {
             member.split("/", 1)[1] if "/" in member else member
             for member in removed_members
@@ -1734,7 +1768,6 @@ class EpubBuilder:
         root.attrib.pop("prefix", None)
         root.attrib["version"] = "2.0"
 
-        metadata = root.find(f"{{{opf_ns}}}metadata")
         if metadata is not None:
             for child in list(metadata):
                 if self._xml_local_name(child.tag) != "meta":
@@ -2137,6 +2170,199 @@ class EpubBuilder:
             value = value.strip()
             return value or None
         return None
+
+    def _normalize_author_name(self, value: object) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        normalized = " ".join(value.replace("\xa0", " ").split())
+        return normalized or None
+
+    def _author_id(self, author: str, seen_ids: set[str]) -> str:
+        normalized = self._normalize_author_name(author) or "author"
+        ascii_name = unicodedata.normalize("NFKD", normalized)
+        ascii_name = ascii_name.encode("ascii", "ignore").decode("ascii")
+        base_id = re.sub(r"[^a-z0-9]+", "_", ascii_name.lower()).strip("_")
+        if not base_id:
+            base_id = "author"
+
+        candidate = base_id
+        suffix = 2
+        while candidate in seen_ids:
+            candidate = f"{base_id}_{suffix}"
+            suffix += 1
+        seen_ids.add(candidate)
+        return candidate
+
+    def _author_ids(self, authors: Sequence[str]) -> list[str]:
+        seen_ids: set[str] = set()
+        return [self._author_id(author, seen_ids) for author in authors]
+
+    def _author_sort_name(self, author: str) -> str:
+        normalized = self._normalize_author_name(author) or ""
+        if not normalized or "," in normalized:
+            return normalized
+
+        parts = normalized.split(" ")
+        if len(parts) == 1:
+            return parts[0]
+
+        suffixes = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+        particles = {
+            "al",
+            "ap",
+            "ben",
+            "bin",
+            "da",
+            "de",
+            "del",
+            "della",
+            "der",
+            "di",
+            "du",
+            "ibn",
+            "la",
+            "le",
+            "st",
+            "st.",
+            "van",
+            "von",
+        }
+
+        for idx in range(len(parts)):
+            parts[idx] = parts[idx].strip()
+
+        index = len(parts) - 1
+        trailing_suffixes: list[str] = []
+        while index > 0 and parts[index].lower() in suffixes:
+            trailing_suffixes.insert(0, parts[index])
+            index -= 1
+
+        surname_tokens = [parts[index]]
+        index -= 1
+        while index > 0 and parts[index].lower() in particles:
+            surname_tokens.insert(0, parts[index])
+            index -= 1
+
+        surname_tokens.extend(trailing_suffixes)
+        given_names = " ".join(parts[: index + 1]).strip()
+        surname = " ".join(surname_tokens).strip()
+        if not given_names:
+            return surname or normalized
+        return f"{surname}, {given_names}"
+
+    def _combined_author_display(self, authors: Sequence[str]) -> str:
+        normalized_authors = [
+            normalized
+            for author in authors
+            if (normalized := self._normalize_author_name(author))
+        ]
+        return ", ".join(normalized_authors)
+
+    def _combined_author_file_as(self, authors: Sequence[str]) -> str:
+        return " & ".join(
+            self._author_sort_name(author)
+            for author in authors
+            if self._normalize_author_name(author)
+        )
+
+    def _strip_aggregate_author_entries(self, authors: Sequence[str]) -> list[str]:
+        filtered = list(authors)
+        changed = True
+        while changed and len(filtered) > 1:
+            changed = False
+            for candidate in list(filtered):
+                others = [author for author in filtered if author != candidate]
+                if not others:
+                    continue
+
+                aggregate_candidates = {
+                    ", ".join(others),
+                    " & ".join(others),
+                    " and ".join(others),
+                }
+                if candidate in aggregate_candidates:
+                    filtered.remove(candidate)
+                    changed = True
+                    break
+        return filtered
+
+    def _apply_legacy_creator_attributes(
+        self,
+        metadata: ET.Element,
+        *,
+        opf_namespace: str,
+        dc_namespace: str,
+    ) -> None:
+        creator_file_as: dict[str, str] = {}
+
+        creators = metadata.findall(f"{{{dc_namespace}}}creator")
+
+        for child in list(metadata):
+            if self._xml_local_name(child.tag) != "meta":
+                continue
+
+            refined_id = child.attrib.get("refines", "")
+            if not refined_id.startswith("#"):
+                continue
+
+            creator_id = refined_id[1:]
+            property_name = self._as_non_empty_str(child.attrib.get("property"))
+            if property_name not in {"file-as", "role"}:
+                continue
+
+            if property_name == "file-as":
+                creator_file_as[creator_id] = (child.text or "").strip()
+            metadata.remove(child)
+
+        creator_ids = self._author_ids(
+            [self._normalize_author_name(creator.text) or "" for creator in creators]
+        )
+        default_multi_author_file_as = (
+            self._combined_author_file_as(
+                [
+                    self._normalize_author_name(creator.text) or ""
+                    for creator in creators
+                ]
+            )
+            if len(creators) > 1
+            else None
+        )
+
+        last_creator_index = -1
+        creator_meta_entries: list[tuple[str, str]] = []
+        for index, child in enumerate(list(metadata)):
+            if self._xml_local_name(child.tag) == "creator":
+                last_creator_index = index
+
+        for creator, creator_id in zip(creators, creator_ids):
+            creator_text = self._normalize_author_name(creator.text) or ""
+            creator.text = creator_text
+            original_id = creator.attrib.get("id") or creator_id
+            creator.attrib["id"] = creator_id
+            creator.attrib.pop(f"{{{opf_namespace}}}file-as", None)
+            creator.attrib.pop("file-as", None)
+            creator.attrib[f"{{{opf_namespace}}}role"] = (
+                creator.attrib.get(f"{{{opf_namespace}}}role") or "aut"
+            )
+
+            creator_meta_entries.append(
+                (
+                    creator_id,
+                    creator_file_as.get(original_id)
+                    or default_multi_author_file_as
+                    or self._author_sort_name(creator_text),
+                )
+            )
+
+        # NOTE: Neither this nor putting the file-as on each creator makes Calibre happy :-)
+        insert_at = last_creator_index + 1 if last_creator_index >= 0 else len(metadata)
+        for offset, (creator_id, file_as) in enumerate(creator_meta_entries):
+            meta_el = ET.Element(
+                f"{{{opf_namespace}}}meta",
+                {"refines": f"#{creator_id}", "property": "file-as"},
+            )
+            meta_el.text = file_as
+            metadata.insert(insert_at + offset, meta_el)
 
     def _unique_strings(self, values: Sequence[str]) -> list[str]:
         results: list[str] = []
