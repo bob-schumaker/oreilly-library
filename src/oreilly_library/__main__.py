@@ -3,7 +3,7 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--login] ISBN...
+    oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--login] ISBN...
 
 Arguments:
     ISBN            Look for these books
@@ -13,6 +13,7 @@ Options:
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --browser=BROWSER   Browser to use for Selenium login. [Default: chrome]
     --login             Force Selenium login to refresh cookies.
+    --check             Run epubcheck validation after building each EPUB.
     --verbose           Make some noise
     --debug             Make a lot of noise
 """
@@ -43,6 +44,7 @@ class oreilly_loader:
         self,
         isbns: Optional[Sequence[str]] = None,
         output_dir: Optional[str] = None,
+        check: bool | None = None,
         verbose: bool | None = None,
         debug: bool | None = None,
         cookie_file: Optional[str] = None,
@@ -59,6 +61,7 @@ class oreilly_loader:
 
         self._identifiers = list(isbns)
         self._output_dir = output_dir
+        self._check = bool(check)
         self._verbose = bool(verbose)
         self._debug = bool(debug)
         self.logger = getLogger(self.__class__.__name__)
@@ -95,6 +98,7 @@ class oreilly_loader:
             identifier=identifier,
             session=self.session,
             output_dir=target_dir,
+            check=self._check,
             verbose=self._verbose and not self._debug,
             debug=self._debug,
         )

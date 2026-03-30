@@ -61,6 +61,7 @@ class EpubBuilder:
         source_dir: Path | str,
         output_dir: Optional[Path | str] = None,
         *,
+        check: bool = False,
         verbose: bool = False,
         debug: bool = False,
     ) -> None:
@@ -68,6 +69,7 @@ class EpubBuilder:
         self.output_dir = (
             Path(output_dir).resolve() if output_dir is not None else self.source_dir
         )
+        self._check = bool(check)
         self._verbose = bool(verbose)
         self._debug = bool(debug)
         self.warnings: list[str] = []
@@ -141,7 +143,8 @@ class EpubBuilder:
 
         self._cleanup_output_archive(output_path, calibre=calibre)
 
-        self._run_epubcheck_if_available(output_path)
+        if self._check:
+            self._run_epubcheck(output_path)
 
         for warning in self.warnings:
             print(f"Warning: {warning}")
@@ -1884,12 +1887,15 @@ class EpubBuilder:
             return lower_matches[0]
         return None
 
-    def _run_epubcheck_if_available(self, output_path: Path) -> None:
-        """Validate the generated EPUB if a checker binary is available."""
+    def _run_epubcheck(self, output_path: Path) -> None:
+        """Validate the generated EPUB with epubcheck."""
 
         checker = self._find_epubchecker()
         if checker is None:
-            return
+            raise RuntimeError(
+                "epubcheck validation was requested, but no epubcheck executable "
+                "was found in PATH. Install epubcheck and retry, or omit --check."
+            )
 
         checker_name, checker_path = checker
         try:
@@ -1950,7 +1956,7 @@ class EpubBuilder:
                 )
 
     def _find_epubchecker(self) -> tuple[str, str] | None:
-        for executable_name in ("ebubchecker", "epubcheck"):
+        for executable_name in ("epubchecker", "epubcheck"):
             executable_path = shutil.which(executable_name)
             if executable_path:
                 return executable_name, executable_path
