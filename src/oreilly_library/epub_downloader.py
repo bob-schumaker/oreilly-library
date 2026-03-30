@@ -144,13 +144,13 @@ class EpubDownloader:
 
         for key, filename in related_endpoints.items():
             target_path = self.destination / filename
-            if target_path.exists():
+            if target_path.exists() and self._related_document_is_complete(target_path):
                 self._log_debug("Skipping existing %s document at %s", key, target_path)
                 continue
             url = metadata.get(key)
             if isinstance(url, str):
                 self._log_debug("Fetching %s document from %s", key, url)
-                data = self._fetch_json(url)
+                data = self._fetch_related_document(url)
                 self._write_json(data, target_path)
 
     def _download_chapters(self) -> None:
@@ -183,6 +183,72 @@ class EpubDownloader:
             aggregated = {}
         self._log_debug("Writing aggregated chapters to %s", chapters_path)
         self._write_json(aggregated, chapters_path)
+
+    def _fetch_related_document(self, url: str) -> object:
+        first_page = self._fetch_json(url)
+        if not self._is_paginated_payload(first_page):
+            return first_page
+
+        aggregated: MutableMapping[str, Any] = dict(first_page)
+        results_data = first_page.get("results")
+        aggregated["results"] = (
+            list(results_data) if isinstance(results_data, list) else []
+        )
+
+        next_value = first_page.get("next")
+        next_url = next_value if isinstance(next_value, str) else None
+        while next_url:
+            page = self._fetch_json(next_url)
+            new_items = page.get("results")
+            if isinstance(new_items, list):
+                aggregated["results"].extend(new_items)
+            next_value = page.get("next")
+            next_url = next_value if isinstance(next_value, str) else None
+
+        aggregated["next"] = None
+        aggregated["previous"] = None
+
+        count = aggregated.get("count")
+        result_count = len(aggregated["results"])
+        aggregated["count"] = (
+            max(count, result_count) if isinstance(count, int) else result_count
+        )
+        return aggregated
+
+    def _related_document_is_complete(self, path: Path) -> bool:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except OSError, json.JSONDecodeError:
+            return False
+
+        if not self._is_paginated_payload(payload):
+            return True
+
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return False
+
+        next_value = payload.get("next")
+        if isinstance(next_value, str) and next_value:
+            return False
+
+        count = payload.get("count")
+        if isinstance(count, int) and len(results) < count:
+            return False
+
+        return True
+
+    def _is_paginated_payload(self, payload: object) -> bool:
+        return (
+            isinstance(payload, Mapping)
+            and isinstance(payload.get("results"), list)
+            and (
+                isinstance(payload.get("count"), int)
+                or "next" in payload
+                or "previous" in payload
+            )
+        )
 
     def _download_files(self, metadata: Mapping[str, Any]) -> None:
         files_url = metadata.get("files")
