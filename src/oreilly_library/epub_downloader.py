@@ -357,6 +357,7 @@ class EpubDownloader:
     # ------------------------------------------------------------------
     def _write_json(self, data: object, path: Path) -> None:
         self._log_debug("Writing JSON data to %s", path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
 
