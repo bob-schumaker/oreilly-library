@@ -13,16 +13,19 @@ print(f"EPUB created at {epub_path}")
 
 from __future__ import annotations
 
-import datetime
 import html
 import json
 import mimetypes
 import os
+import posixpath
 import re
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import urlsplit, urlunsplit
 from zipfile import ZIP_STORED, ZipFile
 
 from ebooklib import epub
@@ -64,6 +67,8 @@ class EpubBuilder:
         )
         self.warnings: list[str] = []
         self._manifest_ids: set[str] = set()
+        self._resource_href_lookup: dict[str, str] = {}
+        self._resource_hrefs_by_name: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -97,6 +102,7 @@ class EpubBuilder:
             spine_items,
             cover_image_href=cover_image_href,
         )
+        self._prepare_resource_lookup(manifest_items)
 
         book = self._create_book(
             identifier=identifier,
@@ -127,6 +133,10 @@ class EpubBuilder:
 
         if calibre:
             self._patch_opf_version(output_path, version="2.0")
+
+        self._cleanup_output_archive(output_path, calibre=calibre)
+
+        self._run_epubcheck_if_available(output_path)
 
         for warning in self.warnings:
             print(f"Warning: {warning}")
@@ -159,14 +169,6 @@ class EpubBuilder:
         book.set_identifier(identifier)
         book.set_title(title)
         book.set_language(language)
-
-        modified = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
-        book.add_metadata(
-            None,
-            "meta",
-            modified.isoformat().replace("+00:00", "Z"),
-            {"property": "dcterms:modified"},
-        )
 
         if publication_date:
             book.add_metadata("DC", "date", publication_date)
@@ -245,6 +247,8 @@ class EpubBuilder:
         data = source_path.read_bytes()
         if source_path.suffix.lower() in {".xhtml", ".html"}:
             data = self._normalize_xhtml(data, manifest_item.href, identifier)
+        elif source_path.suffix.lower() == ".css":
+            data = self._normalize_css(data, manifest_item.href, identifier)
 
         item = epub.EpubItem(
             uid=manifest_item.item_id,
@@ -535,6 +539,20 @@ class EpubBuilder:
 
         return manifest, nav_source_href
 
+    def _prepare_resource_lookup(
+        self,
+        manifest_items: Sequence[ManifestItem],
+    ) -> None:
+        self._resource_href_lookup.clear()
+        self._resource_hrefs_by_name.clear()
+
+        for manifest_item in manifest_items:
+            href = manifest_item.href
+            self._resource_href_lookup[href.lower()] = href
+            file_name = PurePosixPath(href).name.lower()
+            if file_name:
+                self._resource_hrefs_by_name.setdefault(file_name, []).append(href)
+
     # ------------------------------------------------------------------
     # TOC helpers
     # ------------------------------------------------------------------
@@ -763,6 +781,7 @@ class EpubBuilder:
         self,
         *,
         identifier: str,
+        document_href: str,
         image_href: str,
         image_alt: Optional[str] = None,
         width: Optional[int] = None,
@@ -783,17 +802,16 @@ class EpubBuilder:
             cleaned = root_pattern.sub("", cleaned)
             return cleaned
 
-        normalized_href = _rewrite_href(image_href).strip()
-        if normalized_href.lower().startswith("images/"):
-            normalized_href = normalized_href[7:]
-        elif normalized_href.lower().startswith("image/"):
-            normalized_href = normalized_href[6:]
-        elif normalized_href:
-            normalized_href = Path(normalized_href).name
+        normalized_href = self._normalize_resource_reference(
+            _rewrite_href(image_href),
+            current_href=document_href,
+            identifier=identifier,
+        )
         if not normalized_href:
-            normalized_href = "cover.jpg"
-
-        normalized_href = f"{self._image_dir_name()}/{normalized_href}"
+            normalized_href = self._relative_href(
+                document_href,
+                f"{self._image_dir_name()}/cover.jpg",
+            )
         alt_text = image_alt.strip() if image_alt else "Cover image"
 
         img_attrs = [
@@ -838,7 +856,7 @@ class EpubBuilder:
 
         text = text.replace("\r\n", "\n")
         if Path(href).stem.lower() == "cover":
-            return self._normalize_cover(text, identifier)
+            return self._normalize_cover(text, href, identifier)
 
         stripped = text.lstrip()
         xml_decl = ""
@@ -970,24 +988,27 @@ class EpubBuilder:
             return opening + body
 
         text_body = part_header_pattern.sub(_center_part_header, text_body)
+        text_body = self._repair_common_markup_issues(text_body)
 
-        depth = max(len(Path(href).parts) - 1, 0)
-        prefix = "../" * depth
-        api_pattern = re.compile(
-            rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
-            re.IGNORECASE,
-        )
-        text_body = api_pattern.sub(prefix, text_body)
-
-        api_root_pattern = re.compile(
-            rf"/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
-            re.IGNORECASE,
-        )
-        text_body = api_root_pattern.sub(prefix, text_body)
+        text_body = self._rewrite_resource_attributes(text_body, href, identifier)
+        text_body = self._rewrite_css_urls(text_body, href, identifier)
 
         return f"{xml_decl}\n{text_body.lstrip()}".encode("utf-8")
 
-    def _normalize_cover(self, text: str, identifier: str) -> bytes:
+    def _normalize_css(self, content: bytes, href: str, identifier: str) -> bytes:
+        """Normalize CSS ``url(...)`` references to match EPUB resource paths."""
+
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return content
+
+        normalized = self._rewrite_css_urls(
+            text.replace("\r\n", "\n"), href, identifier
+        )
+        return normalized.encode("utf-8")
+
+    def _normalize_cover(self, text: str, href: str, identifier: str) -> bytes:
         """Transform arbitrary cover markup into a standard cover.xhtml body."""
 
         img_match = re.search(r"<img\b[^>]*>", text, re.IGNORECASE)
@@ -1012,11 +1033,242 @@ class EpubBuilder:
 
         return self._render_cover_xhtml(
             identifier=identifier,
+            document_href=href,
             image_href=attrs.get("src", ""),
             image_alt=attrs.get("alt"),
             width=_to_int(attrs.get("width")),
             height=_to_int(attrs.get("height")),
         ).encode("utf-8")
+
+    def _repair_common_markup_issues(self, text: str) -> str:
+        """Repair recurring markup issues found in downloaded chapter content."""
+
+        text = re.sub(r"<col\s+group\s*/>", "<colgroup>", text, flags=re.IGNORECASE)
+        text = re.sub(r"<col\s+group\s*>", "<colgroup>", text, flags=re.IGNORECASE)
+
+        anchor_pattern = re.compile(
+            r"<a\b(?P<attrs>[^>]*)\bname=(?P<quote>['\"])(?P<name>.*?)(?P=quote)(?P<rest>[^>]*)>",
+            re.IGNORECASE,
+        )
+
+        def _promote_anchor(match: re.Match[str]) -> str:
+            attrs = match.group("attrs")
+            rest = match.group("rest")
+            if re.search(r"\bid\s*=", f"{attrs} {rest}", re.IGNORECASE):
+                return match.group(0)
+
+            quote = match.group("quote")
+            name = match.group("name")
+            return (
+                f"<a{attrs}name={quote}{name}{quote}" f" id={quote}{name}{quote}{rest}>"
+            )
+
+        text = anchor_pattern.sub(_promote_anchor, text)
+
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            return text
+
+        ET.register_namespace("", "http://www.w3.org/1999/xhtml")
+        ET.register_namespace("epub", "http://www.idpf.org/2007/ops")
+
+        changed = False
+        for elem in root.iter():
+            local_name = self._xml_local_name(elem.tag)
+            if local_name == "acronym":
+                elem.tag = self._replace_xml_local_name(elem.tag, "abbr")
+                changed = True
+
+            css_updates: list[str] = []
+
+            align = elem.attrib.pop("align", None)
+            if align:
+                css_updates.append(f"text-align:{align.strip()}")
+                changed = True
+
+            valign = elem.attrib.pop("valign", None)
+            if valign:
+                css_updates.append(f"vertical-align:{valign.strip()}")
+                changed = True
+
+            border = elem.attrib.pop("border", None)
+            if border is not None:
+                border_value = border.strip()
+                if border_value == "0":
+                    css_updates.append("border:none")
+                elif border_value.isdigit():
+                    css_updates.append(f"border:{border_value}px solid")
+                changed = True
+
+            if "summary" in elem.attrib:
+                del elem.attrib["summary"]
+                changed = True
+
+            if css_updates:
+                elem.attrib["style"] = self._merge_inline_styles(
+                    elem.attrib.get("style"),
+                    css_updates,
+                )
+
+        if not changed:
+            return text
+        return ET.tostring(root, encoding="unicode")
+
+    def _rewrite_resource_attributes(
+        self,
+        text: str,
+        current_href: str,
+        identifier: str,
+    ) -> str:
+        attr_pattern = re.compile(
+            r'(?P<prefix>\b(?:href|src|poster)\s*=\s*)(?P<quote>["\'])(?P<value>.*?)(?P=quote)',
+            re.IGNORECASE,
+        )
+
+        def _rewrite(match: re.Match[str]) -> str:
+            original_value = match.group("value")
+            normalized_value = self._normalize_resource_reference(
+                original_value,
+                current_href=current_href,
+                identifier=identifier,
+            )
+            quote = match.group("quote")
+            escaped = html.escape(normalized_value, quote=True)
+            return f"{match.group('prefix')}{quote}{escaped}{quote}"
+
+        return attr_pattern.sub(_rewrite, text)
+
+    def _rewrite_css_urls(
+        self,
+        text: str,
+        current_href: str,
+        identifier: str,
+    ) -> str:
+        url_pattern = re.compile(
+            r"url\(\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^)\s]+))\s*\)",
+            re.IGNORECASE,
+        )
+
+        def _rewrite(match: re.Match[str]) -> str:
+            value = (
+                match.group("double")
+                if match.group("double") is not None
+                else (
+                    match.group("single")
+                    if match.group("single") is not None
+                    else match.group("bare") or ""
+                )
+            )
+            normalized_value = self._normalize_resource_reference(
+                value,
+                current_href=current_href,
+                identifier=identifier,
+            )
+            if match.group("double") is not None:
+                return f'url("{normalized_value}")'
+            if match.group("single") is not None:
+                return f"url('{normalized_value}')"
+            return f"url({normalized_value})"
+
+        return url_pattern.sub(_rewrite, text)
+
+    def _normalize_resource_reference(
+        self,
+        value: str,
+        *,
+        current_href: str,
+        identifier: str,
+    ) -> str:
+        normalized_value = self._strip_api_file_prefix(
+            html.unescape(value).strip(), identifier
+        )
+        if not normalized_value or normalized_value.startswith("#"):
+            return normalized_value
+
+        parsed = urlsplit(normalized_value)
+        if parsed.scheme.lower() in {"data", "mailto", "tel", "javascript"}:
+            return normalized_value
+        if parsed.scheme or parsed.netloc:
+            return normalized_value
+
+        target_href = self._resolve_resource_href(parsed.path, current_href)
+        if target_href is None:
+            return normalized_value
+
+        relative_href = self._relative_href(current_href, target_href)
+        if parsed.query:
+            relative_href = f"{relative_href}?{parsed.query}"
+        if parsed.fragment:
+            relative_href = f"{relative_href}#{parsed.fragment}"
+        return relative_href
+
+    def _strip_api_file_prefix(self, value: str, identifier: str) -> str:
+        api_pattern = re.compile(
+            rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+            re.IGNORECASE,
+        )
+        root_pattern = re.compile(
+            rf"/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+            re.IGNORECASE,
+        )
+        cleaned = api_pattern.sub("", value)
+        cleaned = root_pattern.sub("", cleaned)
+        return cleaned.replace("\\", "/")
+
+    def _resolve_resource_href(
+        self,
+        raw_path: str,
+        current_href: str,
+    ) -> Optional[str]:
+        path = raw_path.strip()
+        if not path:
+            return None
+
+        current_dir = posixpath.dirname(current_href) or "."
+        candidates = [
+            (
+                posixpath.normpath(posixpath.join(current_dir, path))
+                if not path.startswith("/")
+                else posixpath.normpath(path.lstrip("/"))
+            ),
+            posixpath.normpath(path.lstrip("/")),
+        ]
+
+        for candidate in candidates:
+            if candidate in {"", "."}:
+                continue
+            actual_href = self._resource_href_lookup.get(candidate.lower())
+            if actual_href is not None:
+                return actual_href
+
+        file_name = PurePosixPath(path).name.lower()
+        if file_name:
+            matches = self._resource_hrefs_by_name.get(file_name, [])
+            if len(matches) == 1:
+                return matches[0]
+
+        return self._fallback_resource_href(path)
+
+    def _fallback_resource_href(self, raw_path: str) -> Optional[str]:
+        path = PurePosixPath(raw_path.lstrip("/"))
+        file_name = path.name
+        if not file_name:
+            return None
+
+        target_dir = self._resource_dir_name_for_suffix(path.suffix.lower())
+        if target_dir is None:
+            return None
+
+        candidate = f"{target_dir}/{file_name}"
+        candidate_path = self._source_path_from_href(candidate)
+        if candidate_path.exists():
+            return self._href_from_path(candidate_path)
+        return None
+
+    def _relative_href(self, current_href: str, target_href: str) -> str:
+        current_dir = posixpath.dirname(current_href) or "."
+        return posixpath.relpath(target_href, start=current_dir)
 
     # ------------------------------------------------------------------
     # Output patching helpers
@@ -1046,15 +1298,482 @@ class EpubBuilder:
                 temp_path.unlink(missing_ok=True)
             self._warn("Unable to patch content.opf version: %s", exc)
 
+    def _cleanup_output_archive(self, output_path: Path, *, calibre: bool) -> None:
+        """Apply post-build cleanups to the generated EPUB archive."""
+
+        temp_path = output_path.with_suffix(output_path.suffix + ".clean")
+        try:
+            with ZipFile(output_path, "r") as source_zip:
+                infos = source_zip.infolist()
+                archive_contents = {
+                    info.filename: source_zip.read(info.filename) for info in infos
+                }
+
+            removed_members = self._members_to_remove(archive_contents, calibre=calibre)
+            anchor_map = self._collect_archive_anchor_map(
+                {
+                    name: data
+                    for name, data in archive_contents.items()
+                    if name not in removed_members
+                }
+            )
+            member_lookup = {
+                name.lower(): name
+                for name in archive_contents
+                if name not in removed_members
+            }
+            basename_lookup: dict[str, list[str]] = {}
+            for name in archive_contents:
+                if name in removed_members:
+                    continue
+                basename_lookup.setdefault(PurePosixPath(name).name.lower(), []).append(
+                    name
+                )
+
+            with ZipFile(temp_path, "w") as target_zip:
+                for info in infos:
+                    name = info.filename
+                    if name in removed_members:
+                        continue
+
+                    data = archive_contents[name]
+                    suffix = PurePosixPath(name).suffix.lower()
+                    if suffix in {".xhtml", ".html"}:
+                        data = self._cleanup_output_document(
+                            data,
+                            name,
+                            calibre=calibre,
+                            anchor_map=anchor_map,
+                            member_lookup=member_lookup,
+                            basename_lookup=basename_lookup,
+                        )
+                    elif suffix == ".ncx":
+                        data = self._cleanup_output_ncx(
+                            data,
+                            name,
+                            anchor_map=anchor_map,
+                            member_lookup=member_lookup,
+                            basename_lookup=basename_lookup,
+                        )
+                    elif suffix == ".opf":
+                        data = self._cleanup_output_opf(
+                            data,
+                            calibre=calibre,
+                            removed_members=removed_members,
+                        )
+
+                    if info.filename == "mimetype":
+                        info.compress_type = ZIP_STORED
+                    target_zip.writestr(info, data)
+
+            os.replace(temp_path, output_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            self._warn("Unable to clean generated EPUB archive: %s", exc)
+
+    def _members_to_remove(
+        self,
+        archive_contents: Mapping[str, bytes],
+        *,
+        calibre: bool,
+    ) -> set[str]:
+        if not calibre:
+            return set()
+
+        return {
+            name
+            for name in archive_contents
+            if PurePosixPath(name).name.lower() == "nav.xhtml"
+        }
+
+    def _collect_archive_anchor_map(
+        self,
+        archive_contents: Mapping[str, bytes],
+    ) -> dict[str, set[str]]:
+        anchor_map: dict[str, set[str]] = {}
+        id_pattern = re.compile(
+            r"\b(?:id|xml:id)\s*=\s*['\"]([^'\"]+)['\"]",
+            re.IGNORECASE,
+        )
+        name_pattern = re.compile(
+            r"<a\b[^>]*\bname\s*=\s*['\"]([^'\"]+)['\"]",
+            re.IGNORECASE,
+        )
+
+        for name, data in archive_contents.items():
+            if PurePosixPath(name).suffix.lower() not in {".xhtml", ".html"}:
+                continue
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            anchors = set(id_pattern.findall(text))
+            anchors.update(name_pattern.findall(text))
+            anchor_map[name] = anchors
+
+        return anchor_map
+
+    def _cleanup_output_document(
+        self,
+        data: bytes,
+        member_name: str,
+        *,
+        calibre: bool,
+        anchor_map: Mapping[str, set[str]],
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> bytes:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
+
+        if calibre:
+            text = re.sub(
+                r"<meta\s+charset=(['\"]).*?\1\s*/>",
+                '<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />',
+                text,
+                flags=re.IGNORECASE,
+            )
+
+        text = self._repair_common_markup_issues(text)
+        text = self._cleanup_archive_links(
+            text,
+            member_name,
+            anchor_map=anchor_map,
+            member_lookup=member_lookup,
+            basename_lookup=basename_lookup,
+        )
+        return text.encode("utf-8")
+
+    def _cleanup_output_ncx(
+        self,
+        data: bytes,
+        member_name: str,
+        *,
+        anchor_map: Mapping[str, set[str]],
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> bytes:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
+
+        text = self._cleanup_archive_links(
+            text,
+            member_name,
+            anchor_map=anchor_map,
+            member_lookup=member_lookup,
+            basename_lookup=basename_lookup,
+            attribute_names=("src",),
+        )
+        return text.encode("utf-8")
+
+    def _cleanup_output_opf(
+        self,
+        data: bytes,
+        *,
+        calibre: bool,
+        removed_members: set[str],
+    ) -> bytes:
+        if not calibre:
+            return data
+
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError:
+            return data
+
+        opf_ns = "http://www.idpf.org/2007/opf"
+        dc_ns = "http://purl.org/dc/elements/1.1/"
+        ET.register_namespace("", opf_ns)
+        ET.register_namespace("dc", dc_ns)
+        ET.register_namespace("opf", opf_ns)
+
+        removed_hrefs = {
+            member.split("/", 1)[1] if "/" in member else member
+            for member in removed_members
+        }
+
+        root.attrib.pop("prefix", None)
+        root.attrib["version"] = "2.0"
+
+        metadata = root.find(f"{{{opf_ns}}}metadata")
+        if metadata is not None:
+            for child in list(metadata):
+                if self._xml_local_name(child.tag) != "meta":
+                    continue
+                if "property" in child.attrib or "refines" in child.attrib:
+                    metadata.remove(child)
+
+        removed_ids: set[str] = set()
+        manifest = root.find(f"{{{opf_ns}}}manifest")
+        if manifest is not None:
+            for item in list(manifest):
+                if self._xml_local_name(item.tag) != "item":
+                    continue
+                item.attrib.pop("properties", None)
+                href = item.attrib.get("href", "")
+                if (
+                    href in removed_hrefs
+                    or PurePosixPath(href).name.lower() == "nav.xhtml"
+                ):
+                    item_id = item.attrib.get("id")
+                    if item_id:
+                        removed_ids.add(item_id)
+                    manifest.remove(item)
+
+        spine = root.find(f"{{{opf_ns}}}spine")
+        if spine is not None:
+            for itemref in list(spine):
+                if self._xml_local_name(itemref.tag) != "itemref":
+                    continue
+                idref = itemref.attrib.get("idref")
+                if idref == "nav" or idref in removed_ids:
+                    spine.remove(itemref)
+
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def _cleanup_archive_links(
+        self,
+        text: str,
+        member_name: str,
+        *,
+        anchor_map: Mapping[str, set[str]],
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+        attribute_names: Sequence[str] = ("href", "src", "poster"),
+    ) -> str:
+        attr_pattern = re.compile(
+            rf'(?P<prefix>\b(?:{"|".join(attribute_names)})\s*=\s*)(?P<quote>["\'])(?P<value>.*?)(?P=quote)',
+            re.IGNORECASE,
+        )
+
+        def _rewrite(match: re.Match[str]) -> str:
+            value = html.unescape(match.group("value"))
+            cleaned_value = self._cleanup_archive_reference_value(
+                value,
+                member_name,
+                anchor_map=anchor_map,
+                member_lookup=member_lookup,
+                basename_lookup=basename_lookup,
+            )
+            quote = match.group("quote")
+            escaped = html.escape(cleaned_value, quote=True)
+            return f"{match.group('prefix')}{quote}{escaped}{quote}"
+
+        return attr_pattern.sub(_rewrite, text)
+
+    def _cleanup_archive_reference_value(
+        self,
+        value: str,
+        member_name: str,
+        *,
+        anchor_map: Mapping[str, set[str]],
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> str:
+        stripped_value = value.strip()
+        if not stripped_value:
+            return stripped_value
+
+        parsed = urlsplit(stripped_value)
+        if parsed.scheme.lower() in {"data", "mailto", "tel", "javascript"}:
+            return stripped_value
+        if parsed.scheme or parsed.netloc:
+            return stripped_value
+
+        target_member = self._resolve_archive_member(
+            parsed.path,
+            member_name,
+            member_lookup=member_lookup,
+            basename_lookup=basename_lookup,
+        )
+        if target_member is None:
+            return stripped_value
+
+        fragment = parsed.fragment
+        if fragment:
+            fragment = self._resolve_archive_fragment(
+                fragment, anchor_map.get(target_member, set())
+            )
+
+        if parsed.path:
+            relative_path = posixpath.relpath(
+                target_member,
+                start=posixpath.dirname(member_name) or ".",
+            )
+        else:
+            relative_path = ""
+
+        return urlunsplit(("", "", relative_path, parsed.query, fragment or ""))
+
+    def _resolve_archive_member(
+        self,
+        raw_path: str,
+        current_member: str,
+        *,
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> Optional[str]:
+        if not raw_path:
+            return current_member
+
+        candidate_paths = [
+            posixpath.normpath(
+                posixpath.join(posixpath.dirname(current_member) or ".", raw_path)
+            ),
+            posixpath.normpath(raw_path.lstrip("/")),
+        ]
+        for candidate in candidate_paths:
+            match = member_lookup.get(candidate.lower())
+            if match is not None:
+                return match
+
+        basename = PurePosixPath(raw_path).name.lower()
+        matches = basename_lookup.get(basename, [])
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def _resolve_archive_fragment(
+        self,
+        fragment: str,
+        anchors: set[str],
+    ) -> Optional[str]:
+        if fragment in anchors:
+            return fragment
+
+        lower_matches = [
+            anchor for anchor in anchors if anchor.lower() == fragment.lower()
+        ]
+        if len(lower_matches) == 1:
+            return lower_matches[0]
+        return None
+
+    def _run_epubcheck_if_available(self, output_path: Path) -> None:
+        """Validate the generated EPUB if a checker binary is available."""
+
+        checker = self._find_epubchecker()
+        if checker is None:
+            return
+
+        checker_name, checker_path = checker
+        try:
+            result = subprocess.run(
+                [checker_path, str(output_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:  # pragma: no cover - defensive
+            self._warn("Unable to run %s: %s", checker_name, exc)
+            return
+
+        checker_output = "\n".join(
+            part.strip() for part in (result.stdout, result.stderr) if part.strip()
+        )
+        fatal_count, error_count, warning_count = self._parse_epubcheck_counts(
+            checker_output
+        )
+        if fatal_count or error_count:
+            raise RuntimeError(
+                f"{checker_name} validation failed for {output_path.name}:\n{checker_output}"
+            )
+
+        if result.returncode != 0 and fatal_count is None and error_count is None:
+            raise RuntimeError(
+                f"{checker_name} returned a non-zero exit status for {output_path.name}:\n{checker_output}"
+            )
+
+        if checker_output:
+            self._warn(
+                "%s output for %s:\n%s", checker_name, output_path.name, checker_output
+            )
+
+        if warning_count:
+            self._warn(
+                "%s reported %s warning(s) for %s",
+                checker_name,
+                warning_count,
+                output_path.name,
+            )
+
+    def _find_epubchecker(self) -> tuple[str, str] | None:
+        for executable_name in ("ebubchecker", "epubcheck"):
+            executable_path = shutil.which(executable_name)
+            if executable_path:
+                return executable_name, executable_path
+        return None
+
+    def _parse_epubcheck_counts(
+        self,
+        checker_output: str,
+    ) -> tuple[Optional[int], Optional[int], Optional[int]]:
+        match = re.search(
+            r"Messages:\s*(\d+)\s+fatals?\s*/\s*(\d+)\s+errors?\s*/\s*(\d+)\s+warnings?",
+            checker_output,
+            re.IGNORECASE,
+        )
+        if match is None:
+            return None, None, None
+        fatal_count = int(match.group(1))
+        error_count = int(match.group(2))
+        warning_count = int(match.group(3))
+        return fatal_count, error_count, warning_count
+
+    def _xml_local_name(self, tag: str) -> str:
+        if "}" in tag:
+            return tag.split("}", 1)[1]
+        return tag
+
+    def _replace_xml_local_name(self, tag: str, local_name: str) -> str:
+        if "}" in tag:
+            namespace = tag.split("}", 1)[0][1:]
+            return f"{{{namespace}}}{local_name}"
+        return local_name
+
+    def _merge_inline_styles(
+        self,
+        existing_style: Optional[str],
+        additions: Sequence[str],
+    ) -> str:
+        style_map: dict[str, str] = {}
+
+        if existing_style:
+            for declaration in existing_style.split(";"):
+                if ":" not in declaration:
+                    continue
+                key, value = declaration.split(":", 1)
+                key = key.strip().lower()
+                value = value.strip()
+                if key and value:
+                    style_map[key] = value
+
+        for declaration in additions:
+            if ":" not in declaration:
+                continue
+            key, value = declaration.split(":", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key and value:
+                style_map[key] = value
+
+        return "; ".join(f"{key}:{value}" for key, value in style_map.items())
+
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
     def _manifest_id_from_href(self, href: str) -> str:
         base = Path(href).stem
-        if "Images" in href:
+        if "images" in href.lower():
             base = "img_" + base
         sanitized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in base)
         sanitized = sanitized.lstrip("_") or "item"
+        if not sanitized[0].isalpha() and sanitized[0] != "_":
+            sanitized = f"item_{sanitized}"
 
         candidate = sanitized
         counter = 1
@@ -1083,6 +1802,45 @@ class EpubBuilder:
         if image_dir is not None:
             return image_dir.name
         return "Images"
+
+    def _style_dir_name(self) -> str:
+        styles_dir = self._find_optional_dir("Styles", "styles")
+        if styles_dir is not None:
+            return styles_dir.name
+        return "Styles"
+
+    def _font_dir_name(self) -> str:
+        fonts_dir = self._find_optional_dir("fonts", "Fonts")
+        if fonts_dir is not None:
+            return fonts_dir.name
+        return "fonts"
+
+    def _text_dir_name(self) -> str:
+        text_dir = self._find_optional_dir("xhtml", "text")
+        if text_dir is not None:
+            return text_dir.name
+        return "xhtml"
+
+    def _resource_dir_name_for_suffix(self, suffix: str) -> Optional[str]:
+        if suffix in {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".bmp",
+            ".tiff",
+            ".ico",
+        }:
+            return self._image_dir_name()
+        if suffix == ".css":
+            return self._style_dir_name()
+        if suffix in {".ttf", ".otf", ".woff", ".woff2", ".eot"}:
+            return self._font_dir_name()
+        if suffix in {".xhtml", ".html"}:
+            return self._text_dir_name()
+        return None
 
     def _as_non_empty_str(self, value: object) -> Optional[str]:
         if isinstance(value, str):
