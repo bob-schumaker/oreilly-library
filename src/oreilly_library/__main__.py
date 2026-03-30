@@ -3,14 +3,13 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--calibre] [--login] ISBN...
+    oreilly-library [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--login] ISBN...
 
 Arguments:
     ISBN            Look for these books
 
 Options:
     --output-dir=OUTPUT Put the output files here. [Default: working/Books]
-    --calibre           Use version 2.0 in the OPF for Calibre compatibility.
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --browser=BROWSER   Browser to use for Selenium login. [Default: chrome]
     --login             Force Selenium login to refresh cookies.
@@ -43,7 +42,6 @@ class oreilly_loader:
     def __init__(
         self,
         isbns: Optional[Sequence[str]] = None,
-        calibre: bool = False,
         output_dir: Optional[str] = None,
         verbose: bool | None = None,
         debug: bool | None = None,
@@ -60,7 +58,6 @@ class oreilly_loader:
             raise ValueError("No ISBN identifiers provided.")
 
         self._identifiers = list(isbns)
-        self._calibre = calibre
         self._output_dir = output_dir
         self._verbose = bool(verbose)
         self._debug = bool(debug)
@@ -101,7 +98,7 @@ class oreilly_loader:
             verbose=self._verbose and not self._debug,
             debug=self._debug,
         )
-        downloader.download_and_build(calibre=self._calibre)
+        downloader.download_and_build()
 
     def run(self) -> int:
         if self._output_dir and not Path(self._output_dir).exists():

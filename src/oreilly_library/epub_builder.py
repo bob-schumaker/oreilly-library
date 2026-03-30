@@ -38,7 +38,7 @@ mimetypes.add_type("image/jpeg", ".jpeg")
 mimetypes.add_type("image/png", ".png")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("font/ttf", ".ttf")
-mimetypes.add_type("font/otf", ".otf")
+mimetypes.add_type("application/vnd.ms-opentype", ".otf")
 mimetypes.add_type("font/woff", ".woff")
 mimetypes.add_type("font/woff2", ".woff2")
 
@@ -829,6 +829,8 @@ class EpubBuilder:
     def _guess_media_type(self, path: Path) -> str:
         if path.suffix.lower() in {".xhtml", ".html"}:
             return "application/xhtml+xml"
+        if path.suffix.lower() == ".otf":
+            return "application/vnd.ms-opentype"
 
         media_type, _ = mimetypes.guess_type(path.name)
         if media_type:
