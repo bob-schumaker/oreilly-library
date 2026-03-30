@@ -21,10 +21,14 @@ EPUB_CHAPTERS_URL = (
     "https://learning.oreilly.com/api/v2/epub-chapters/"
     "?epub_identifier=urn:orm:book:{identifier}"
 )
-EPUB_CHAPTERS_URL = (
+EPUB_SEARCH_URL = (
     "https://learning.oreilly.com/search/api/search/"
     "?q={identifier}&type=article&type=book&type=shortcut&rows=100&language=en&language=ja&feature_flags=improveSearchFilters&tzOffset=8&aia_only=false&report=true&isTopics=false"
 )
+
+COVER_MIN_WIDTH = 510
+COVER_MIN_HEIGHT = 680
+COVER_FALLBACK_URL = "https://learning.oreilly.com/covers/{book_urn}/{size}{axis}/"
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,8 @@ class EpubDownloader:
         self._download_chapters()
         self._log_info("Downloading additional files")
         self._download_files(book_info)
+        self._log_info("Ensuring cover assets")
+        self._ensure_cover_assets(book_info)
 
         self._log_info("Completed download for %s", self.identifier)
 
@@ -125,9 +131,21 @@ class EpubDownloader:
     def _chapters_url(self) -> str:
         return EPUB_CHAPTERS_URL.format(identifier=self.identifier)
 
+    @property
+    def _search_url(self) -> str:
+        return EPUB_SEARCH_URL.format(identifier=self.identifier)
+
     def fetch_bookinfo(self) -> MutableMapping[str, Any]:
         """Get the book metadata."""
-        book_info = self._fetch_json(self._main_api_url)
+        book_info = {}
+        search_info = self._fetch_json(self._search_url)
+        if search_info and "data" in search_info:
+            products = search_info["data"].get("products")
+            if products:
+                book_info.update(products[0])
+        api_info = self._fetch_json(self._main_api_url)
+        if api_info:
+            book_info.update(api_info)
         metadata = self._fetch_json(self._metadata_url)
         results = metadata.get("results")
         if results:
@@ -261,6 +279,324 @@ class EpubDownloader:
             if isinstance(results, list):
                 for item in results:
                     self._download_file_entry(item)
+
+    def _ensure_cover_assets(self, metadata: Mapping[str, Any]) -> None:
+        cover_document_path = self._local_cover_document_path()
+        cover_image_path = self._local_cover_image_path()
+        cover_dimensions: Optional[tuple[int, int]] = None
+
+        if cover_image_path is None:
+            cover_image_path, cover_dimensions = self._download_cover_image_fallback(
+                metadata
+            )
+        else:
+            try:
+                cover_dimensions = self._image_dimensions_from_bytes(
+                    cover_image_path.read_bytes()
+                )
+            except OSError:
+                cover_dimensions = None
+
+        if cover_image_path is None:
+            return
+
+        if cover_document_path is None:
+            self._write_cover_document(cover_image_path, cover_dimensions)
+            self._prepend_cover_to_spine()
+
+    def _download_cover_image_fallback(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> tuple[Optional[Path], Optional[tuple[int, int]]]:
+        cover_hint = self._extract_cover_image_hint(metadata)
+        if not cover_hint:
+            self._log_debug("No cover_image metadata available for %s", self.identifier)
+            return None, None
+
+        hint_dimensions: Optional[tuple[int, int]] = None
+        try:
+            hint_bytes = self._fetch_bytes(cover_hint)
+            hint_dimensions = self._image_dimensions_from_bytes(hint_bytes)
+        except Exception as exc:  # pragma: no cover - network failure path
+            self._log_debug("Unable to inspect cover_image %s: %s", cover_hint, exc)
+
+        request_size, request_axis = self._cover_request_target(hint_dimensions)
+        book_urn = self._book_urn(metadata)
+        candidate_targets = [(request_size, request_axis)]
+        alternate_target = (
+            (COVER_MIN_HEIGHT, "h") if request_axis == "w" else (COVER_MIN_WIDTH, "w")
+        )
+        if alternate_target != candidate_targets[0]:
+            candidate_targets.append(alternate_target)
+
+        best_candidate: tuple[bytes, Optional[tuple[int, int]], str] | None = None
+        best_score: tuple[int, int, int] = (-1, -1, -1)
+
+        for size, axis in candidate_targets:
+            url = COVER_FALLBACK_URL.format(book_urn=book_urn, size=size, axis=axis)
+            try:
+                image_bytes = self._fetch_bytes(url)
+            except Exception as exc:  # pragma: no cover - network failure path
+                self._log_debug("Unable to fetch fallback cover image %s: %s", url, exc)
+                continue
+
+            dimensions = self._image_dimensions_from_bytes(image_bytes)
+            score = self._cover_candidate_score(dimensions)
+            if best_candidate is None or score > best_score:
+                best_candidate = (image_bytes, dimensions, url)
+                best_score = score
+
+            if self._cover_meets_minimums(dimensions):
+                break
+
+        if best_candidate is None:
+            return None, None
+
+        image_bytes, dimensions, source_url = best_candidate
+        extension = self._image_extension_from_bytes(image_bytes)
+        target_path = self.destination / "Images" / f"cover{extension}"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_debug(
+            "Saving fallback cover image from %s to %s", source_url, target_path
+        )
+        target_path.write_bytes(image_bytes)
+        return target_path, dimensions
+
+    def _extract_cover_image_hint(self, metadata: Mapping[str, Any]) -> Optional[str]:
+        direct_keys = (
+            "cover_image",
+            "cover_image_url",
+            "cover",
+        )
+        for key in direct_keys:
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        chapters_path = self.destination / "chapters.json"
+        if not chapters_path.exists():
+            return None
+
+        try:
+            with chapters_path.open("r", encoding="utf-8") as handle:
+                chapters_payload = json.load(handle)
+        except OSError, json.JSONDecodeError:
+            return None
+
+        if isinstance(chapters_payload, Mapping):
+            results = chapters_payload.get("results")
+            if isinstance(results, list):
+                for item in results:
+                    if not isinstance(item, Mapping):
+                        continue
+                    value = item.get("cover_image")
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+
+        return None
+
+    def _book_urn(self, metadata: Mapping[str, Any]) -> str:
+        urn = metadata.get("ourn")
+        if isinstance(urn, str) and urn.strip():
+            return urn.strip()
+        return f"urn:orm:book:{self.identifier}"
+
+    def _local_cover_document_path(self) -> Optional[Path]:
+        xhtml_dir = self.destination / "xhtml"
+        for file_name in ("cover.xhtml", "cover.html"):
+            candidate = xhtml_dir / file_name
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _local_cover_image_path(self) -> Optional[Path]:
+        images_dir = self.destination / "Images"
+        if not images_dir.exists():
+            return None
+
+        candidate_patterns = (
+            "cover.*",
+            f"{self.identifier}.*",
+            "*cover*.*",
+        )
+        seen: set[Path] = set()
+        for pattern in candidate_patterns:
+            for candidate in sorted(images_dir.glob(pattern)):
+                if candidate.is_file() and candidate not in seen:
+                    seen.add(candidate)
+                    return candidate
+        return None
+
+    def _write_cover_document(
+        self,
+        image_path: Path,
+        dimensions: Optional[tuple[int, int]],
+    ) -> None:
+        xhtml_dir = self.destination / "xhtml"
+        xhtml_dir.mkdir(parents=True, exist_ok=True)
+
+        cover_document_path = xhtml_dir / "cover.xhtml"
+        relative_href = Path("..") / image_path.relative_to(self.destination)
+        width_attr = f' width="{dimensions[0]}"' if dimensions else ""
+        height_attr = f' height="{dimensions[1]}"' if dimensions else ""
+
+        cover_document = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml" '
+            'xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">\n'
+            "<head>\n"
+            "<title>Cover</title>\n"
+            "</head>\n"
+            "<body>\n"
+            f'<img src="{relative_href.as_posix()}" alt="Cover image"{width_attr}{height_attr} />\n'
+            "</body>\n"
+            "</html>\n"
+        )
+        self._log_debug("Writing synthetic cover document to %s", cover_document_path)
+        cover_document_path.write_text(cover_document, encoding="utf-8")
+
+    def _prepend_cover_to_spine(self) -> None:
+        spine_path = self.destination / "spine.json"
+        if not spine_path.exists():
+            return
+
+        try:
+            with spine_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except OSError, json.JSONDecodeError:
+            return
+
+        if not isinstance(payload, MutableMapping):
+            return
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return
+
+        for entry in results:
+            if not isinstance(entry, Mapping):
+                continue
+            reference_id = entry.get("reference_id")
+            if (
+                isinstance(reference_id, str)
+                and Path(reference_id).name == "cover.xhtml"
+            ):
+                return
+
+        results.insert(
+            0,
+            {
+                "reference_id": f"{self.identifier}-/xhtml/cover.xhtml",
+                "title": "Cover",
+            },
+        )
+        count = payload.get("count")
+        payload["count"] = (
+            max(count, len(results)) if isinstance(count, int) else len(results)
+        )
+        self._write_json(payload, spine_path)
+
+    def _cover_candidate_score(
+        self,
+        dimensions: Optional[tuple[int, int]],
+    ) -> tuple[int, int, int]:
+        if dimensions is None:
+            return (0, 0, 0)
+
+        width, height = dimensions
+        meets_target = int(self._cover_meets_minimums(dimensions))
+        matching_dimensions = int(width >= COVER_MIN_WIDTH) + int(
+            height >= COVER_MIN_HEIGHT
+        )
+        return (meets_target, matching_dimensions, width * height)
+
+    def _cover_meets_minimums(
+        self,
+        dimensions: Optional[tuple[int, int]],
+    ) -> bool:
+        if dimensions is None:
+            return False
+        width, height = dimensions
+        return width >= COVER_MIN_WIDTH and height >= COVER_MIN_HEIGHT
+
+    def _cover_request_target(
+        self,
+        dimensions: Optional[tuple[int, int]],
+    ) -> tuple[int, str]:
+        if dimensions is None:
+            return COVER_MIN_HEIGHT, "h"
+
+        width, height = dimensions
+        if width <= 0 or height <= 0:
+            return COVER_MIN_HEIGHT, "h"
+
+        scaled_height_at_min_width = (COVER_MIN_WIDTH * height) / width
+        if scaled_height_at_min_width >= COVER_MIN_HEIGHT:
+            return COVER_MIN_WIDTH, "w"
+        return COVER_MIN_HEIGHT, "h"
+
+    def _image_dimensions_from_bytes(
+        self,
+        image_bytes: bytes,
+    ) -> Optional[tuple[int, int]]:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) >= 24:
+            width = int.from_bytes(image_bytes[16:20], "big")
+            height = int.from_bytes(image_bytes[20:24], "big")
+            return width, height
+
+        if image_bytes[:6] in {b"GIF87a", b"GIF89a"} and len(image_bytes) >= 10:
+            width = int.from_bytes(image_bytes[6:8], "little")
+            height = int.from_bytes(image_bytes[8:10], "little")
+            return width, height
+
+        if image_bytes.startswith(b"\xff\xd8"):
+            offset = 2
+            sof_markers = {
+                0xC0,
+                0xC1,
+                0xC2,
+                0xC3,
+                0xC5,
+                0xC6,
+                0xC7,
+                0xC9,
+                0xCA,
+                0xCB,
+                0xCD,
+                0xCE,
+                0xCF,
+            }
+            while offset < len(image_bytes):
+                while offset < len(image_bytes) and image_bytes[offset] != 0xFF:
+                    offset += 1
+                while offset < len(image_bytes) and image_bytes[offset] == 0xFF:
+                    offset += 1
+                if offset >= len(image_bytes):
+                    break
+                marker = image_bytes[offset]
+                offset += 1
+                if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
+                    continue
+                if offset + 2 > len(image_bytes):
+                    break
+                segment_length = int.from_bytes(image_bytes[offset : offset + 2], "big")
+                if segment_length < 2 or offset + segment_length > len(image_bytes):
+                    break
+                if marker in sof_markers and segment_length >= 7:
+                    height = int.from_bytes(image_bytes[offset + 3 : offset + 5], "big")
+                    width = int.from_bytes(image_bytes[offset + 5 : offset + 7], "big")
+                    return width, height
+                offset += segment_length
+
+        return None
+
+    def _image_extension_from_bytes(self, image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ".png"
+        if image_bytes[:6] in {b"GIF87a", b"GIF89a"}:
+            return ".gif"
+        if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+            return ".webp"
+        return ".jpg"
 
     def _download_file_entry(self, item: Mapping[str, Any]) -> None:
         path = self._extract_path(item)
