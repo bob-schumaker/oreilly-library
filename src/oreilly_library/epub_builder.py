@@ -320,6 +320,15 @@ class EpubBuilder:
                     categories.extend(
                         item for item in value if isinstance(item, str) and item.strip()
                     )
+
+        raw_topics = metadata.get("topics")
+        if isinstance(raw_topics, list):
+            for topic in raw_topics:
+                if isinstance(topic, dict):
+                    name = self._as_non_empty_str(topic.get("name"))
+                    if name:
+                        categories.append(name)
+
         if metadata.get("roughcut"):
             categories.append("early release")
         return self._unique_strings(categories)
@@ -487,6 +496,8 @@ class EpubBuilder:
             item_id = self._manifest_id_from_href(href)
             media_type = self._guess_media_type(path)
             item_properties = list(properties or [])
+            if path.suffix.lower() in {".xhtml", ".html"}:
+                item_properties.extend(self._detect_document_properties(path))
             if cover_image_href and href == cover_image_href:
                 item_properties.append("cover-image")
 
@@ -538,6 +549,23 @@ class EpubBuilder:
                 manifest_hrefs.add(href)
 
         return manifest, nav_source_href
+
+    def _detect_document_properties(self, path: Path) -> list[str]:
+        """Detect EPUB manifest properties needed for an XHTML/HTML document."""
+
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return []
+
+        properties: list[str] = []
+        if re.search(
+            r"<math\b|http://www\.w3\.org/1998/Math/MathML", text, re.IGNORECASE
+        ):
+            properties.append("mathml")
+        if re.search(r"<svg\b|http://www\.w3\.org/2000/svg", text, re.IGNORECASE):
+            properties.append("svg")
+        return properties
 
     def _prepare_resource_lookup(
         self,
@@ -1153,6 +1181,149 @@ class EpubBuilder:
             return text
         return ET.tostring(root, encoding="unicode")
 
+    def _normalize_html_boolean_attributes(self, text: str) -> str:
+        """Rewrite HTML boolean attributes into XML-safe attribute syntax."""
+
+        boolean_attrs = ("async", "defer", "checked", "disabled", "selected")
+
+        def _normalize_tag(match: re.Match[str]) -> str:
+            tag_text = match.group(0)
+            for attr_name in boolean_attrs:
+                tag_text = re.sub(
+                    rf"\b{attr_name}\b(?!\s*=)",
+                    f'{attr_name}="{attr_name}"',
+                    tag_text,
+                    flags=re.IGNORECASE,
+                )
+            return tag_text
+
+        return re.sub(r"<script\b[^>]*>", _normalize_tag, text, flags=re.IGNORECASE)
+
+    def _strip_unresolvable_resource_tags(
+        self,
+        text: str,
+        member_name: str,
+        *,
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> str:
+        """Remove script/link tags that point to resources not present in the EPUB."""
+
+        def _maybe_remove_script(match: re.Match[str]) -> str:
+            tag_text = match.group(0)
+            src_match = re.search(
+                r'\bsrc\s*=\s*["\']([^"\']+)["\']',
+                tag_text,
+                re.IGNORECASE,
+            )
+            if src_match and self._is_unresolved_archive_reference(
+                src_match.group(1),
+                member_name,
+                member_lookup=member_lookup,
+                basename_lookup=basename_lookup,
+            ):
+                return ""
+            return tag_text
+
+        def _maybe_remove_link(match: re.Match[str]) -> str:
+            tag_text = match.group(0)
+            href_match = re.search(
+                r'\bhref\s*=\s*["\']([^"\']+)["\']',
+                tag_text,
+                re.IGNORECASE,
+            )
+            if href_match and self._is_unresolved_archive_reference(
+                href_match.group(1),
+                member_name,
+                member_lookup=member_lookup,
+                basename_lookup=basename_lookup,
+            ):
+                return ""
+            return tag_text
+
+        text = re.sub(
+            r"<script\b[^>]*>.*?</script>",
+            _maybe_remove_script,
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return re.sub(
+            r"<link\b[^>]*?/?>",
+            _maybe_remove_link,
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    def _prune_unresolved_archive_references(
+        self,
+        text: str,
+        member_name: str,
+        *,
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> str:
+        """Remove stale overlay blocks or unresolved resource attributes post-parse."""
+
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            return text
+
+        changed = False
+
+        def _walk(parent: ET.Element) -> None:
+            nonlocal changed
+            for child in list(parent):
+                _walk(child)
+
+                local_name = self._xml_local_name(child.tag)
+                if local_name == "div" and child.attrib.get("id") == "sec-overlay":
+                    parent.remove(child)
+                    changed = True
+                    continue
+
+                for attr_name in ("src", "href", "poster"):
+                    attr_value = child.attrib.get(attr_name)
+                    if not attr_value:
+                        continue
+                    if self._is_unresolved_archive_reference(
+                        attr_value,
+                        member_name,
+                        member_lookup=member_lookup,
+                        basename_lookup=basename_lookup,
+                    ):
+                        del child.attrib[attr_name]
+                        changed = True
+
+        _walk(root)
+        if not changed:
+            return text
+        return ET.tostring(root, encoding="unicode")
+
+    def _is_unresolved_archive_reference(
+        self,
+        value: str,
+        member_name: str,
+        *,
+        member_lookup: Mapping[str, str],
+        basename_lookup: Mapping[str, Sequence[str]],
+    ) -> bool:
+        stripped_value = html.unescape(value).strip()
+        if not stripped_value:
+            return False
+
+        parsed = urlsplit(stripped_value)
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            return False
+
+        target_member = self._resolve_archive_member(
+            parsed.path,
+            member_name,
+            member_lookup=member_lookup,
+            basename_lookup=basename_lookup,
+        )
+        return target_member is None
+
     def _rewrite_resource_attributes(
         self,
         text: str,
@@ -1475,7 +1646,20 @@ class EpubBuilder:
                 flags=re.IGNORECASE,
             )
 
+        text = self._normalize_html_boolean_attributes(text)
+        text = self._strip_unresolvable_resource_tags(
+            text,
+            member_name,
+            member_lookup=member_lookup,
+            basename_lookup=basename_lookup,
+        )
         text = self._repair_common_markup_issues(text)
+        text = self._prune_unresolved_archive_references(
+            text,
+            member_name,
+            member_lookup=member_lookup,
+            basename_lookup=basename_lookup,
+        )
         text = self._cleanup_archive_links(
             text,
             member_name,
