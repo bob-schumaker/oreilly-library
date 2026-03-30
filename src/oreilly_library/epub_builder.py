@@ -1207,23 +1207,7 @@ class EpubBuilder:
         member_lookup: Mapping[str, str],
         basename_lookup: Mapping[str, Sequence[str]],
     ) -> str:
-        """Remove script/link tags that point to resources not present in the EPUB."""
-
-        def _maybe_remove_script(match: re.Match[str]) -> str:
-            tag_text = match.group(0)
-            src_match = re.search(
-                r'\bsrc\s*=\s*["\']([^"\']+)["\']',
-                tag_text,
-                re.IGNORECASE,
-            )
-            if src_match and self._is_unresolved_archive_reference(
-                src_match.group(1),
-                member_name,
-                member_lookup=member_lookup,
-                basename_lookup=basename_lookup,
-            ):
-                return ""
-            return tag_text
+        """Remove script tags and link tags with invalid/unresolvable hrefs."""
 
         def _maybe_remove_link(match: re.Match[str]) -> str:
             tag_text = match.group(0)
@@ -1242,10 +1226,7 @@ class EpubBuilder:
             return tag_text
 
         text = re.sub(
-            r"<script\b[^>]*>.*?</script>",
-            _maybe_remove_script,
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
+            r"<script\b[^>]*>.*?</script>", "", text, flags=re.IGNORECASE | re.DOTALL
         )
         return re.sub(
             r"<link\b[^>]*?/?>",
@@ -1286,6 +1267,10 @@ class EpubBuilder:
                     attr_value = child.attrib.get(attr_name)
                     if not attr_value:
                         continue
+                    if attr_name == "href" and self._href_requires_removal(attr_value):
+                        del child.attrib[attr_name]
+                        changed = True
+                        continue
                     if self._is_unresolved_archive_reference(
                         attr_value,
                         member_name,
@@ -1316,6 +1301,9 @@ class EpubBuilder:
         if parsed.scheme or parsed.netloc or not parsed.path:
             return False
 
+        if self._href_requires_removal(stripped_value):
+            return True
+
         target_member = self._resolve_archive_member(
             parsed.path,
             member_name,
@@ -1323,6 +1311,20 @@ class EpubBuilder:
             basename_lookup=basename_lookup,
         )
         return target_member is None
+
+    def _href_requires_removal(self, href: str) -> bool:
+        """Return ``True`` when an href should be stripped from cleaned output."""
+
+        stripped_href = html.unescape(href).strip()
+        if not stripped_href or stripped_href.startswith("#"):
+            return False
+
+        parsed = urlsplit(stripped_href)
+        path = parsed.path
+        if not path:
+            return False
+
+        return PurePosixPath(path).suffix == ""
 
     def _rewrite_resource_attributes(
         self,
