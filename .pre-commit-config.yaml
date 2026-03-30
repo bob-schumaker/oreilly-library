@@ -1,0 +1,31 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+    - id: check-yaml
+    - id: pretty-format-json
+      args: [--autofix]
+-   repo: local
+    hooks:
+    - id: tomlcheck
+      name: Check TOML Syntax
+      description: Checks TOML files for valid syntax.
+      entry: tomlcheck
+      language: system
+      files: \**/.*\.toml$
+      stages: [pre-commit, pre-push, manual]
+    - id: black
+      name: Opinionated Formatting (black)
+      entry: black
+      language: python
+      language_version: python3
+      files: \**/.*\.py$
+      stages: [pre-commit, pre-push, manual]
+-   repo: https://github.com/pre-commit/mirrors-isort
+    rev: v5.10.1
+    hooks:
+    -   id: isort
+-   repo: https://github.com/PyCQA/flake8
+    rev: 7.3.0
+    hooks:
+    - id: flake8

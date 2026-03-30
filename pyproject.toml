@@ -1,0 +1,32 @@
+[project]
+name = "oreilly-library"
+version = "0.1.0"
+description = "Download books from the O'Reilly library if you have access."
+authors = [
+    {name = "Bob Schumaker",email = "bob.schumaker@oracle.com"}
+]
+requires-python = ">=3.14"
+dependencies = [
+    "requests (>=2.32.5,<3.0.0)",
+    "cobblerslib[docopt] (>=0.1.30)",
+    "selenium (>=4.41.0,<5.0.0)",
+    "tqdm (>=4.67.3,<5.0.0)",
+    "ebooklib (>=0.20,<0.21)"
+]
+
+[[tool.poetry.source]]
+name = 'cobblerslib'
+url = 'https://cobblers.pkgs.visualstudio.com/cobblerslib/_packaging/cobblerslib/pypi/simple/'
+priority = "supplemental"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pre-commit (>=4.5.1,<5.0.0)"
+]
+
+[tool.poetry.scripts]
+oreilly-library = "oreilly_library.__main__:main"
