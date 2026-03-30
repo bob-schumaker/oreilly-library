@@ -60,11 +60,16 @@ class EpubBuilder:
         self,
         source_dir: Path | str,
         output_dir: Optional[Path | str] = None,
+        *,
+        verbose: bool = False,
+        debug: bool = False,
     ) -> None:
         self.source_dir = Path(source_dir).resolve()
         self.output_dir = (
             Path(output_dir).resolve() if output_dir is not None else self.source_dir
         )
+        self._verbose = bool(verbose)
+        self._debug = bool(debug)
         self.warnings: list[str] = []
         self._manifest_ids: set[str] = set()
         self._resource_href_lookup: dict[str, str] = {}
@@ -1904,28 +1909,45 @@ class EpubBuilder:
         fatal_count, error_count, warning_count = self._parse_epubcheck_counts(
             checker_output
         )
+        checker_summary = self._summarize_epubcheck_output(
+            checker_output,
+            returncode=result.returncode,
+            fatal_count=fatal_count,
+            error_count=error_count,
+            warning_count=warning_count,
+        )
+        show_full_output = self._verbose or self._debug
         if fatal_count or error_count:
+            checker_message = checker_output if show_full_output else checker_summary
+            if not show_full_output:
+                checker_message = f"{checker_message}\nUse --verbose to see the full epubcheck output."
             raise RuntimeError(
-                f"{checker_name} validation failed for {output_path.name}:\n{checker_output}"
+                f"{checker_name} validation failed for {output_path.name}:\n{checker_message}"
             )
 
         if result.returncode != 0 and fatal_count is None and error_count is None:
+            checker_message = checker_output if show_full_output else checker_summary
+            if not show_full_output:
+                checker_message = f"{checker_message}\nUse --verbose to see the full epubcheck output."
             raise RuntimeError(
-                f"{checker_name} returned a non-zero exit status for {output_path.name}:\n{checker_output}"
+                f"{checker_name} returned a non-zero exit status for {output_path.name}:\n{checker_message}"
             )
 
         if checker_output:
-            self._warn(
-                "%s output for %s:\n%s", checker_name, output_path.name, checker_output
-            )
-
-        if warning_count:
-            self._warn(
-                "%s reported %s warning(s) for %s",
-                checker_name,
-                warning_count,
-                output_path.name,
-            )
+            if show_full_output:
+                self._warn(
+                    "%s output for %s:\n%s",
+                    checker_name,
+                    output_path.name,
+                    checker_output,
+                )
+            else:
+                self._warn(
+                    "%s summary for %s: %s",
+                    checker_name,
+                    output_path.name,
+                    checker_summary,
+                )
 
     def _find_epubchecker(self) -> tuple[str, str] | None:
         for executable_name in ("ebubchecker", "epubcheck"):
@@ -1949,6 +1971,42 @@ class EpubBuilder:
         error_count = int(match.group(2))
         warning_count = int(match.group(3))
         return fatal_count, error_count, warning_count
+
+    def _summarize_epubcheck_output(
+        self,
+        checker_output: str,
+        *,
+        returncode: int,
+        fatal_count: Optional[int],
+        error_count: Optional[int],
+        warning_count: Optional[int],
+    ) -> str:
+        summary_match = re.search(
+            r"Messages:\s*\d+\s+fatals?\s*/\s*\d+\s+errors?\s*/\s*\d+\s+warnings?",
+            checker_output,
+            re.IGNORECASE,
+        )
+        if summary_match is not None:
+            return " ".join(summary_match.group(0).split())
+
+        if (
+            fatal_count is not None
+            and error_count is not None
+            and warning_count is not None
+        ):
+            return (
+                "Messages: "
+                f"{fatal_count} fatals / {error_count} errors / {warning_count} warnings"
+            )
+
+        first_line = next(
+            (line.strip() for line in checker_output.splitlines() if line.strip()),
+            "",
+        )
+        if first_line:
+            return first_line
+
+        return f"epubcheck exited with status {returncode}"
 
     def _xml_local_name(self, tag: str) -> str:
         if "}" in tag:

@@ -111,7 +111,11 @@ class EpubDownloader:
         source_dir = self.download()
         self._log_info("Building EPUB archive for %s", self.identifier)
         self._log_debug("Creating EpubBuilder for %s", source_dir)
-        builder = EpubBuilder(source_dir)
+        builder = EpubBuilder(
+            source_dir,
+            verbose=self._verbose,
+            debug=self._debug,
+        )
         epub_path = builder.build_epub()
         self._log_info("Finished building EPUB archive at %s", epub_path)
         return DownloadResult(source_dir=source_dir, epub_path=epub_path)
