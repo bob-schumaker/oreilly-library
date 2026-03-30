@@ -561,23 +561,59 @@ class EpubBuilder:
         manifest_lookup: Mapping[str, epub.EpubItem],
         spine_items: Sequence[Path],
     ) -> tuple[Any, ...]:
+        spine_hrefs = [
+            href
+            for path in spine_items
+            if (href := self._href_from_path(path)) in manifest_lookup
+            and Path(href).stem.lower() != "nav"
+        ]
+
         raw_toc = self._load_toc_entries()
         if raw_toc:
-            built: list[Any] = []
+            built_entries: list[tuple[Optional[str], Any]] = []
+            nodes_by_href: dict[str, list[Any]] = {}
+
             for entry in raw_toc:
-                node = self._build_toc_node(entry, manifest_lookup)
+                href = self._resolve_toc_href(entry, manifest_lookup)
+                node = self._build_toc_node(
+                    entry,
+                    manifest_lookup,
+                    resolved_href=href,
+                )
                 if node is not None:
+                    base_href = href.split("#", 1)[0] if href else None
+                    built_entries.append((base_href, node))
+                    if base_href:
+                        nodes_by_href.setdefault(base_href, []).append(node)
+
+            built: list[Any] = []
+            emitted_hrefs: set[str] = set()
+            for href in spine_hrefs:
+                if href in emitted_hrefs:
+                    continue
+                emitted_hrefs.add(href)
+
+                nodes = nodes_by_href.get(href)
+                if nodes:
+                    built.extend(nodes)
+                    continue
+
+                built.append(
+                    epub.Link(href, self._title_from_href(href), self._toc_uid(href))
+                )
+
+            for base_href, node in built_entries:
+                if base_href is None or base_href not in emitted_hrefs:
                     built.append(node)
+
             if built:
                 return tuple(built)
 
         fallback: list[epub.Link] = []
-        for path in spine_items:
-            href = self._href_from_path(path)
-            if href in manifest_lookup:
-                fallback.append(
-                    epub.Link(href, self._title_from_href(href), self._toc_uid(href))
-                )
+        for href in spine_hrefs:
+            fallback.append(
+                epub.Link(href, self._title_from_href(href), self._toc_uid(href))
+            )
         return tuple(fallback)
 
     def _load_toc_entries(self) -> list[Mapping[str, Any]]:
@@ -604,8 +640,10 @@ class EpubBuilder:
         self,
         entry: Mapping[str, Any],
         manifest_lookup: Mapping[str, epub.EpubItem],
+        *,
+        resolved_href: Optional[str] = None,
     ) -> Any | None:
-        href = self._resolve_toc_href(entry, manifest_lookup)
+        href = resolved_href or self._resolve_toc_href(entry, manifest_lookup)
         title = self._as_non_empty_str(entry.get("title"))
         if not title:
             title = self._title_from_href(href or "Document")
