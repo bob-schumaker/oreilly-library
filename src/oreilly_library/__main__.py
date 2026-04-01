@@ -3,7 +3,7 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] [--cookie-file=FILE] [--browser=BROWSER] [--login] ISBN...
+    oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] ISBN...
 
 Arguments:
     ISBN            Look for these books
@@ -11,8 +11,7 @@ Arguments:
 Options:
     --output-dir=OUTPUT Put the output files here. [Default: working/Books]
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
-    --browser=BROWSER   Browser to use for Selenium login. [Default: chrome]
-    --login             Force Selenium login to refresh cookies.
+    --login=BROWSER     Force Selenium login to refresh cookies using BROWSER.
     --check             Run epubcheck validation after building each EPUB.
     --verbose           Make some noise
     --debug             Make a lot of noise
@@ -49,7 +48,7 @@ class oreilly_loader:
         debug: bool | None = None,
         cookie_file: Optional[str] = None,
         browser: str | None = None,
-        login: bool | None = None,
+        login: str | bool | None = None,
         **kwargs,
     ) -> None:
         if isinstance(isbns, str):
@@ -69,8 +68,10 @@ class oreilly_loader:
         self._cookies_file = Path(
             cookie_file or cookies_env or os.path.join(PATH, "cookies.json")
         )
-        self._browser = (browser or "chrome").lower()
-        self._force_login = bool(login)
+        self._browser, self._force_login = self._resolve_login_configuration(
+            login=login,
+            browser=browser,
+        )
         self.session = requests.Session()
         cookie_data = self._ensure_cookies()
         self._apply_cookie_data(cookie_data)
@@ -104,6 +105,29 @@ class oreilly_loader:
         )
         downloader.download_and_build()
 
+    @staticmethod
+    def _normalize_browser_name(
+        browser: str | None,
+        *,
+        fallback: str | None = "chrome",
+    ) -> str:
+        normalized_browser = (browser or "").strip().lower()
+        if normalized_browser:
+            return normalized_browser
+        if fallback is not None:
+            return fallback
+        raise ValueError("A browser name is required when using --login=BROWSER.")
+
+    def _resolve_login_configuration(
+        self,
+        login: str | bool | None,
+        browser: str | None,
+    ) -> tuple[str, bool]:
+        if isinstance(login, str):
+            return self._normalize_browser_name(login, fallback=None), True
+        resolved_browser = self._normalize_browser_name(browser)
+        return resolved_browser, bool(login)
+
     def run(self) -> int:
         if self._output_dir and not Path(self._output_dir).exists():
             Path(self._output_dir).mkdir(parents=True, exist_ok=True)
@@ -118,7 +142,7 @@ class oreilly_loader:
     def _ensure_cookies(self) -> list[dict] | dict:
         if self._force_login:
             self.logger.info(
-                "--login flag supplied. Launching Selenium to refresh cookies.",
+                f"--login={self._browser} supplied. Launching Selenium to refresh cookies.",
             )
             cookie_data = self._collect_cookies_with_selenium(self._cookies_file)
             self._persist_cookies(cookie_data, self._cookies_file)
@@ -197,7 +221,7 @@ class oreilly_loader:
                 "OREILLY_LOGIN_URL", "https://learning.oreilly.com/"
             )
             self.logger.warning(
-                "Cookie file not found. Launching browser to collect cookies...",
+                f"Cookie file not found. Launching {self._browser} to collect cookies...",
             )
             driver.get(login_url)
             if self._verbose:
@@ -232,7 +256,6 @@ def main() -> int:
     kw_args = docopt_arguments(
         arguments, all_args=True, logger=getLogger("oreilly-library")
     )
-    kw_args.setdefault("browser", "chrome")
     app = oreilly_loader(**kw_args)
     return app.run()
 
