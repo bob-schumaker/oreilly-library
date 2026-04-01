@@ -62,6 +62,7 @@ class EpubDownloader:
         output_dir: Path | str = Path("data"),
         *,
         check: bool = False,
+        clean: bool = False,
         verbose: bool = False,
         debug: bool = False,
         logger: Optional[logging.Logger] = None,
@@ -71,6 +72,7 @@ class EpubDownloader:
         self.base_output_dir = Path(output_dir)
         self.destination = (self.base_output_dir / identifier).resolve()
         self._check = bool(check)
+        self._clean = bool(clean)
         self._verbose = bool(verbose) and not bool(debug)
         self._debug = bool(debug)
         self.logger = logger or logging.getLogger(__name__)
@@ -119,7 +121,7 @@ class EpubDownloader:
             verbose=self._verbose,
             debug=self._debug,
         )
-        epub_path = builder.build_epub()
+        epub_path = builder.build_epub(clean=self._clean)
         self._log_info("Finished building EPUB archive at %s", epub_path)
         return DownloadResult(source_dir=source_dir, epub_path=epub_path)
 
