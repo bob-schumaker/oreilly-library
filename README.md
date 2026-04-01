@@ -69,7 +69,7 @@ Supported cookie formats:
 
 ```text
 oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] \
-                [--cookie-file=FILE] [--browser=BROWSER] [--login] ISBN...
+                [--cookie-file=FILE] [--login=BROWSER] ISBN...
 ```
 
 ### Arguments
@@ -80,8 +80,7 @@ oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] \
 
 - `--output-dir=OUTPUT`: write downloaded assets and generated EPUBs here
 - `--cookie-file=FILE`: load cookies from a JSON file
-- `--browser=BROWSER`: browser to use for Selenium login (`chrome` only)
-- `--login`: force a fresh Selenium login even if cookies already exist
+- `--login=BROWSER`: force a fresh Selenium login with the selected browser (`chrome` only)
 - `--check`: run `epubcheck` after building each EPUB
 - `--verbose`: show progress messages
 - `--debug`: show detailed debug logging
@@ -113,7 +112,7 @@ poetry run oreilly-library \
 ### Force a new interactive login
 
 ```bash
-poetry run oreilly-library --login 9781718504417
+poetry run oreilly-library --login=chrome 9781718504417
 ```
 
 ### Validate the resulting EPUB with epubcheck
