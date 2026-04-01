@@ -3,12 +3,13 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] ISBN...
+    oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
 
 Arguments:
     ISBN            Look for these books
 
 Options:
+    --browser           Get the open URLs from the browser and load the ones that are Safari books
     --output-dir=OUTPUT Put the output files here. [Default: working/Books]
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --login=BROWSER     Force Selenium login to refresh cookies using BROWSER.
@@ -19,6 +20,7 @@ Options:
 
 import json
 import os
+import re
 import sys
 import time
 from logging import getLogger
@@ -30,6 +32,9 @@ from cobblerslib import general
 from cobblerslib.general.docopt import docopt, docopt_arguments
 from cobblerslib.general.texthandling import text_input
 from tqdm import tqdm
+
+if sys.platform == "darwin":
+    from appscript import app
 
 from oreilly_library.epub_downloader import EpubDownloader
 
@@ -56,11 +61,14 @@ class oreilly_loader:
         elif isinstance(isbns, Iterable):
             isbns = list(isbns)
         if not isbns:
-            raise ValueError("No ISBN identifiers provided.")
-
-        self._identifiers = list(isbns)
+            if not browser:
+                raise ValueError("No ISBN identifiers or --browser flag provided.")
+            self._identifiers = []
+        else:
+            self._identifiers = list(isbns)
         self._output_dir = output_dir
         self._check = bool(check)
+        self._browser = browser
         self._verbose = bool(verbose)
         self._debug = bool(debug)
         self.logger = getLogger(self.__class__.__name__)
@@ -68,9 +76,8 @@ class oreilly_loader:
         self._cookies_file = Path(
             cookie_file or cookies_env or os.path.join(PATH, "cookies.json")
         )
-        self._browser, self._force_login = self._resolve_login_configuration(
+        self._login = self._resolve_login_configuration(
             login=login,
-            browser=browser,
         )
         self.session = requests.Session()
         cookie_data = self._ensure_cookies()
@@ -121,16 +128,26 @@ class oreilly_loader:
     def _resolve_login_configuration(
         self,
         login: str | bool | None,
-        browser: str | None,
     ) -> tuple[str, bool]:
         if isinstance(login, str):
             return self._normalize_browser_name(login, fallback=None), True
-        resolved_browser = self._normalize_browser_name(browser)
-        return resolved_browser, bool(login)
+        return "chrome", bool(login)
 
     def run(self) -> int:
         if self._output_dir and not Path(self._output_dir).exists():
             Path(self._output_dir).mkdir(parents=True, exist_ok=True)
+        if self._browser:
+            for tab in app("Google Chrome").windows[0].tabs():
+                url = tab.URL()
+                if not url or "learning.oreilly.com" not in url:
+                    continue
+                identifier = Path(url).name
+                if identifier:
+                    identifier = str(identifier)
+                    if re.match(r"^[0-9]+$", identifier):
+                        self._identifiers.append(identifier)
+                        if self._debug:
+                            self.logger.debug(f"Found identifier {identifier}")
         if len(self._identifiers) > 1 and not self._verbose and not self._debug:
             iterator = tqdm(self._identifiers)
         else:
@@ -140,9 +157,9 @@ class oreilly_loader:
         return 0
 
     def _ensure_cookies(self) -> list[dict] | dict:
-        if self._force_login:
+        if self._login[1]:
             self.logger.info(
-                f"--login={self._browser} supplied. Launching Selenium to refresh cookies.",
+                f"--login={self._login} supplied. Launching Selenium to refresh cookies.",
             )
             cookie_data = self._collect_cookies_with_selenium(self._cookies_file)
             self._persist_cookies(cookie_data, self._cookies_file)
@@ -197,9 +214,9 @@ class oreilly_loader:
                 "Install it with 'pip install selenium' or provide a cookie file."
             ) from exc
 
-        if self._browser != "chrome":
+        if self._login != "chrome":
             raise RuntimeError(
-                f"Unsupported browser '{self._browser}'. Only 'chrome' is currently supported."
+                f"Unsupported browser '{self._login}'. Only 'chrome' is currently supported."
             )
 
         chrome_options = ChromeOptions()
@@ -221,7 +238,7 @@ class oreilly_loader:
                 "OREILLY_LOGIN_URL", "https://learning.oreilly.com/"
             )
             self.logger.warning(
-                f"Cookie file not found. Launching {self._browser} to collect cookies...",
+                f"Cookie file not found. Launching {self._login} to collect cookies...",
             )
             driver.get(login_url)
             if self._verbose:
@@ -251,7 +268,17 @@ class oreilly_loader:
 
 def main() -> int:
     """Setup logging and collect arguments for our application."""
-    arguments = docopt(__doc__)
+    usage_doc = __doc__ or ""
+    if sys.platform != "darwin":
+        usage_doc = re.sub(r"\s*\[--browser \| ISBN\.\.\.\]", " [ISBN...]", usage_doc)
+        usage_doc = re.sub(
+            r"^\s*--browser\s+.*\n",
+            "",
+            usage_doc,
+            flags=re.MULTILINE,
+        )
+
+    arguments = docopt(usage_doc)
     general.setup_logging(options=arguments)
     kw_args = docopt_arguments(
         arguments, all_args=True, logger=getLogger("oreilly-library")
