@@ -1886,6 +1886,12 @@ class EpubBuilder:
                 opf_namespace=opf_ns,
                 dc_namespace=dc_ns,
             )
+            self._ensure_isbn_identifier(
+                metadata,
+                opf_namespace=opf_ns,
+                dc_namespace=dc_ns,
+                unique_identifier=root.attrib.get("unique-identifier"),
+            )
 
         if not calibre:
             return ET.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -2493,6 +2499,67 @@ class EpubBuilder:
             )
             meta_el.text = file_as
             metadata.insert(insert_at + offset, meta_el)
+
+    def _ensure_isbn_identifier(
+        self,
+        metadata: ET.Element,
+        *,
+        opf_namespace: str,
+        dc_namespace: str,
+        unique_identifier: Optional[str],
+    ) -> None:
+        identifier_value = self._resolve_primary_opf_identifier(
+            metadata,
+            dc_namespace=dc_namespace,
+            unique_identifier=unique_identifier,
+        )
+        if identifier_value is None:
+            return
+
+        for identifier in metadata.findall(f"{{{dc_namespace}}}identifier"):
+            scheme = self._as_non_empty_str(
+                identifier.attrib.get(f"{{{opf_namespace}}}scheme")
+            ) or self._as_non_empty_str(identifier.attrib.get("scheme"))
+            if scheme and scheme.upper() == "ISBN":
+                existing_value = self._as_non_empty_str(identifier.text)
+                if existing_value == identifier_value:
+                    return
+
+        isbn_identifier = ET.Element(
+            f"{{{dc_namespace}}}identifier",
+            {f"{{{opf_namespace}}}scheme": "ISBN"},
+        )
+        isbn_identifier.text = identifier_value
+
+        insert_at = len(metadata)
+        for index, child in enumerate(list(metadata)):
+            if self._xml_local_name(child.tag) == "identifier":
+                insert_at = index + 1
+
+        metadata.insert(insert_at, isbn_identifier)
+
+    def _resolve_primary_opf_identifier(
+        self,
+        metadata: ET.Element,
+        *,
+        dc_namespace: str,
+        unique_identifier: Optional[str],
+    ) -> Optional[str]:
+        identifiers = metadata.findall(f"{{{dc_namespace}}}identifier")
+
+        if unique_identifier:
+            for identifier in identifiers:
+                if identifier.attrib.get("id") == unique_identifier:
+                    identifier_value = self._as_non_empty_str(identifier.text)
+                    if identifier_value is not None:
+                        return identifier_value
+
+        for identifier in identifiers:
+            identifier_value = self._as_non_empty_str(identifier.text)
+            if identifier_value is not None:
+                return identifier_value
+
+        return None
 
     def _unique_strings(self, values: Sequence[str]) -> list[str]:
         results: list[str] = []
