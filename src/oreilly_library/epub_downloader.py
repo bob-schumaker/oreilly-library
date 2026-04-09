@@ -246,7 +246,9 @@ class EpubDownloader:
         try:
             with path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except OSError, json.JSONDecodeError:
+        except OSError:
+            return False
+        except json.JSONDecodeError:
             return False
 
         if not self._is_paginated_payload(payload):
@@ -282,6 +284,7 @@ class EpubDownloader:
         if not isinstance(files_url, str):
             files_url = f"{self._main_api_url}files/"
 
+        files_url += "?limit=1000"
         for page in self._iterate_paginated(files_url):
             self._log_debug("Processing files page from %s", files_url)
             results = page.get("results", []) or []
@@ -389,7 +392,9 @@ class EpubDownloader:
         try:
             with chapters_path.open("r", encoding="utf-8") as handle:
                 chapters_payload = json.load(handle)
-        except OSError, json.JSONDecodeError:
+        except OSError:
+            return None
+        except json.JSONDecodeError:
             return None
 
         if isinstance(chapters_payload, Mapping):
@@ -472,7 +477,9 @@ class EpubDownloader:
         try:
             with spine_path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except OSError, json.JSONDecodeError:
+        except OSError:
+            return
+        except json.JSONDecodeError:
             return
 
         if not isinstance(payload, MutableMapping):

@@ -68,8 +68,9 @@ Supported cookie formats:
 ## Command-line usage
 
 ```text
-oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] \
-                [--cookie-file=FILE] [--login=BROWSER] ISBN...
+oreilly-library [--verbose] [--debug] [--check] [--clean] [--build] \
+                [--output-dir=OUTPUT] [--cookie-file=FILE] \
+                [--login=BROWSER] ISBN...
 ```
 
 ### Arguments
@@ -78,10 +79,13 @@ oreilly-library [--verbose] [--debug] [--check] [--output-dir=OUTPUT] \
 
 ### Options
 
+- `--browser`: find any Safari book links in browser tabs (mac-only, Chrome-only)
+- `--build`: rebuild EPUBs from previously downloaded local files without downloading again
 - `--output-dir=OUTPUT`: write downloaded assets and generated EPUBs here
 - `--cookie-file=FILE`: load cookies from a JSON file
 - `--login=BROWSER`: force a fresh Selenium login with the selected browser (`chrome` only)
 - `--check`: run `epubcheck` after building each EPUB
+- `--clean`: run Calibre `ebook-polish` after building each EPUB
 - `--verbose`: show progress messages
 - `--debug`: show detailed debug logging
 
@@ -121,6 +125,17 @@ poetry run oreilly-library --login=chrome 9781718504417
 poetry run oreilly-library --check 9781718504417
 ```
 
+### Rebuild an EPUB from previously downloaded files only
+
+```bash
+poetry run oreilly-library --build --output-dir ./working/Books 9781718504417
+```
+
+When `--build` is used, the CLI skips cookie loading and network downloads. It
+looks for an existing extracted book directory under `--output-dir` (for example
+`./working/Books/Book Title (9781718504417)` or a folder containing
+`9781718504417.json`) and rebuilds the `.epub` from those local files.
+
 ## Output layout
 
 For each book, the downloader creates a working folder containing metadata and
@@ -151,6 +166,9 @@ The downloader:
 4. Normalizes downloaded resources for local EPUB packaging
 5. Builds an EPUB archive with `ebooklib`
 6. Optionally runs `epubcheck`
+
+With `--build`, steps 1-4 are skipped and the tool rebuilds directly from an
+existing local extraction.
 
 The builder performs additional cleanup, including:
 

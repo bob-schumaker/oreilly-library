@@ -3,13 +3,14 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--check] [--clean] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
+    oreilly-library [--verbose] [--debug] [--check] [--clean] [--build] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
 
 Arguments:
     ISBN            Look for these books
 
 Options:
     --browser           Get the open URLs from the browser and load the ones that are Safari books
+    --build             Build EPUBs from previously downloaded local files without downloading again
     --output-dir=OUTPUT Put the output files here. [Default: working/Books]
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --login=BROWSER     Force Selenium login to refresh cookies using BROWSER.
@@ -37,6 +38,7 @@ from tqdm import tqdm
 if sys.platform == "darwin":
     from appscript import app
 
+from oreilly_library.epub_builder import EpubBuilder
 from oreilly_library.epub_downloader import EpubDownloader
 
 PATH = os.environ.get("SAFARIBOOKS_PATH") or "working"
@@ -51,6 +53,7 @@ class oreilly_loader:
         output_dir: Optional[str] = None,
         check: bool | None = None,
         clean: bool | None = None,
+        build: bool | None = None,
         verbose: bool | None = None,
         debug: bool | None = None,
         cookie_file: Optional[str] = None,
@@ -71,6 +74,7 @@ class oreilly_loader:
         self._output_dir = output_dir
         self._check = bool(check)
         self._clean = bool(clean)
+        self._build = bool(build)
         self._browser = browser
         self._verbose = bool(verbose)
         self._debug = bool(debug)
@@ -82,21 +86,23 @@ class oreilly_loader:
         self._login = self._resolve_login_configuration(
             login=login,
         )
-        self.session = requests.Session()
-        cookie_data = self._ensure_cookies()
-        self._apply_cookie_data(cookie_data)
-        headers = {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Referer": "https://learning.oreilly.com/login/unified/?next=/home/",
-            "Upgrade-Insecure-Requests": "1",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/90.0.4430.212 Safari/537.36",
-        }
-        self.session.headers.update(headers)
+        self.session: requests.Session | None = None
+        if not self._build:
+            self.session = requests.Session()
+            cookie_data = self._ensure_cookies()
+            self._apply_cookie_data(cookie_data)
+            headers = {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Encoding": "gzip, deflate",
+                "Referer": "https://learning.oreilly.com/login/unified/?next=/home/",
+                "Upgrade-Insecure-Requests": "1",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/90.0.4430.212 Safari/537.36",
+            }
+            self.session.headers.update(headers)
 
     def download_epub(self, identifier: str, output_dir: Optional[str] = None) -> None:
-        """Use the EpubDownloaer class to fetch an epub."""
+        """Download and build an EPUB, or rebuild it from local files."""
         target_dir: Path
         if output_dir is not None:
             target_dir = Path(output_dir)
@@ -104,6 +110,26 @@ class oreilly_loader:
             target_dir = Path(self._output_dir)
         else:
             target_dir = Path(PATH) / "Books"
+
+        if self._build:
+            source_dir = self._resolve_existing_source_dir(identifier, target_dir)
+            if self._verbose or self._debug:
+                self.logger.info(
+                    "Building EPUB for %s from local files in %s",
+                    identifier,
+                    source_dir,
+                )
+            builder = EpubBuilder(
+                source_dir,
+                check=self._check,
+                verbose=self._verbose and not self._debug,
+                debug=self._debug,
+            )
+            builder.build_epub(clean=self._clean)
+            return
+
+        if self.session is None:
+            raise RuntimeError("Authenticated session was not initialized.")
 
         downloader = EpubDownloader(
             identifier=identifier,
@@ -115,6 +141,72 @@ class oreilly_loader:
             debug=self._debug,
         )
         downloader.download_and_build()
+
+    def _resolve_existing_source_dir(self, identifier: str, base_dir: Path) -> Path:
+        candidates: list[Path] = []
+
+        identifier_path = Path(identifier).expanduser()
+        if identifier_path.is_dir():
+            candidates.append(identifier_path)
+
+        candidates.extend([base_dir / identifier, base_dir])
+
+        if base_dir.exists():
+            child_dirs = sorted(path for path in base_dir.iterdir() if path.is_dir())
+            for child in child_dirs:
+                if child.name == identifier or child.name.endswith(f"({identifier})"):
+                    candidates.append(child)
+            candidates.extend(child_dirs)
+
+        seen: set[Path] = set()
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if self._directory_matches_identifier(resolved, identifier):
+                return resolved
+
+        raise FileNotFoundError(
+            "Unable to find previously downloaded files for "
+            f"{identifier!r} under {base_dir}."
+        )
+
+    def _directory_matches_identifier(self, directory: Path, identifier: str) -> bool:
+        if not directory.is_dir():
+            return False
+
+        if (directory / f"{identifier}.json").exists():
+            return True
+
+        if directory.name == identifier or directory.name.endswith(f"({identifier})"):
+            return True
+
+        for metadata_path in sorted(directory.glob("*.json")):
+            try:
+                with metadata_path.open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except OSError:
+                continue
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(payload, dict):
+                continue
+
+            known_identifiers = {
+                str(value)
+                for value in (
+                    payload.get("identifier"),
+                    payload.get("isbn"),
+                    payload.get("id"),
+                )
+                if value is not None
+            }
+            if identifier in known_identifiers:
+                return True
+
+        return False
 
     @staticmethod
     def _normalize_browser_name(
