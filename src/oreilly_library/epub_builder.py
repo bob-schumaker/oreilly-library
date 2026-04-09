@@ -1011,6 +1011,7 @@ class EpubBuilder:
             return content
 
         text = text.replace("\r\n", "\n")
+        text = self._strip_xhtml_comments(text)
         if Path(href).stem.lower() == "cover":
             return self._normalize_cover(text, href, identifier)
 
@@ -1160,9 +1161,84 @@ class EpubBuilder:
             return content
 
         normalized = self._rewrite_css_urls(
-            text.replace("\r\n", "\n"), href, identifier
+            self._strip_css_comments(text.replace("\r\n", "\n")),
+            href,
+            identifier,
         )
         return normalized.encode("utf-8")
+
+    def _strip_xhtml_comments(self, text: str) -> str:
+        """Remove XML/HTML comments while preserving line structure."""
+
+        comment_pattern = re.compile(r"<!--.*?-->", re.DOTALL)
+
+        def _replace(match: re.Match[str]) -> str:
+            return "\n" * match.group(0).count("\n")
+
+        return comment_pattern.sub(_replace, text)
+
+    def _strip_css_comments(self, text: str) -> str:
+        """Remove CSS comments while preserving quoted strings and line structure."""
+
+        result: list[str] = []
+        index = 0
+        in_single_quote = False
+        in_double_quote = False
+        escaped = False
+
+        while index < len(text):
+            character = text[index]
+
+            if in_single_quote:
+                result.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == "'":
+                    in_single_quote = False
+                index += 1
+                continue
+
+            if in_double_quote:
+                result.append(character)
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    in_double_quote = False
+                index += 1
+                continue
+
+            if character == "'":
+                in_single_quote = True
+                result.append(character)
+                index += 1
+                continue
+
+            if character == '"':
+                in_double_quote = True
+                result.append(character)
+                index += 1
+                continue
+
+            if character == "/" and index + 1 < len(text) and text[index + 1] == "*":
+                end_index = text.find("*/", index + 2)
+                if end_index == -1:
+                    comment = text[index:]
+                    result.append("\n" * comment.count("\n"))
+                    break
+
+                comment = text[index : end_index + 2]
+                result.append("\n" * comment.count("\n"))
+                index = end_index + 2
+                continue
+
+            result.append(character)
+            index += 1
+
+        return "".join(result)
 
     def _normalize_cover(self, text: str, href: str, identifier: str) -> bytes:
         """Transform arbitrary cover markup into a standard cover.xhtml body."""
