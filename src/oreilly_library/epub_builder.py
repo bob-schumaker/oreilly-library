@@ -243,14 +243,11 @@ class EpubBuilder:
             for author in authors
             if (normalized := self._normalize_author_name(author))
         ]
-        multi_author_file_as = (
-            self._combined_author_file_as(authors) if len(authors) > 1 else None
-        )
         author_ids = self._author_ids(authors)
         for author, uid in zip(authors, author_ids):
             book.add_author(
                 author,
-                file_as=multi_author_file_as or self._author_sort_name(author),
+                file_as=self._author_sort_name(author),
                 role="aut",
                 uid=uid,
             )
@@ -2386,21 +2383,6 @@ class EpubBuilder:
             return surname or normalized
         return f"{surname}, {given_names}"
 
-    def _combined_author_display(self, authors: Sequence[str]) -> str:
-        normalized_authors = [
-            normalized
-            for author in authors
-            if (normalized := self._normalize_author_name(author))
-        ]
-        return ", ".join(normalized_authors)
-
-    def _combined_author_file_as(self, authors: Sequence[str]) -> str:
-        return " & ".join(
-            self._author_sort_name(author)
-            for author in authors
-            if self._normalize_author_name(author)
-        )
-
     def _strip_aggregate_author_entries(self, authors: Sequence[str]) -> list[str]:
         filtered = list(authors)
         changed = True
@@ -2453,16 +2435,6 @@ class EpubBuilder:
         creator_ids = self._author_ids(
             [self._normalize_author_name(creator.text) or "" for creator in creators]
         )
-        default_multi_author_file_as = (
-            self._combined_author_file_as(
-                [
-                    self._normalize_author_name(creator.text) or ""
-                    for creator in creators
-                ]
-            )
-            if len(creators) > 1
-            else None
-        )
 
         last_creator_index = -1
         creator_meta_entries: list[tuple[str, str]] = []
@@ -2485,7 +2457,6 @@ class EpubBuilder:
                 (
                     creator_id,
                     creator_file_as.get(original_id)
-                    or default_multi_author_file_as
                     or self._author_sort_name(creator_text),
                 )
             )
