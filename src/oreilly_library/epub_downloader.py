@@ -21,10 +21,14 @@ EPUB_CHAPTERS_URL = (
     "https://learning.oreilly.com/api/v2/epub-chapters/"
     "?epub_identifier=urn:orm:book:{identifier}"
 )
+EPUB_HTML_SEARCH_URL = (
+    "https://learning.oreilly.com/search/?q={identifier}&type=book&rows=100&language=en"
+)
 EPUB_SEARCH_URL = (
     "https://learning.oreilly.com/search/api/search/"
-    "?q={identifier}&type=article&type=book&type=shortcut&rows=100&language=en&language=ja&feature_flags=improveSearchFilters&tzOffset=8&aia_only=false&report=true&isTopics=false"
+    "?q={identifier}&type=book&rows=100&language=en"
 )
+OREILLY_HOME_URL = "https://learning.oreilly.com/"
 
 COVER_MIN_WIDTH = 510
 COVER_MIN_HEIGHT = 680
@@ -144,21 +148,55 @@ class EpubDownloader:
     def _search_url(self) -> str:
         return EPUB_SEARCH_URL.format(identifier=self.identifier)
 
+    @property
+    def _html_search_url(self) -> str:
+        return EPUB_HTML_SEARCH_URL.format(identifier=self.identifier)
+
+    @property
+    def _html_search_headers(self) -> dict[str, str]:
+        return {
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "image/avif,image/webp,*/*;q=0.8"
+            ),
+            "Referer": OREILLY_HOME_URL,
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+        }
+
+    @property
+    def _search_api_headers(self) -> dict[str, str]:
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Referer": self._html_search_url,
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+
     def fetch_bookinfo(self) -> MutableMapping[str, Any]:
         """Get the book metadata."""
         book_info = {}
-        search_info = self._fetch_json(self._search_url)
+        _ = self._fetch_bytes(self._html_search_url, headers=self._html_search_headers)
+        search_info = self._fetch_json(
+            self._search_url,
+            headers=self._search_api_headers,
+        )
         if search_info and "data" in search_info:
             products = search_info["data"].get("products")
             if products:
                 book_info.update(products[0])
-        api_info = self._fetch_json(self._main_api_url)
-        if api_info:
-            book_info.update(api_info)
         metadata = self._fetch_json(self._metadata_url)
         results = metadata.get("results")
         if results:
             book_info.update(results[0])
+        api_info = self._fetch_optional_json(self._main_api_url)
+        if api_info:
+            book_info.update(api_info)
         return book_info
 
     def _download_related_documents(self, metadata: Mapping[str, Any]) -> None:
@@ -750,15 +788,24 @@ class EpubDownloader:
     # ------------------------------------------------------------------
     # HTTP helpers
     # ------------------------------------------------------------------
-    def _fetch_json(self, url: str) -> MutableMapping[str, Any]:
+    def _fetch_json(self, url: str, **kw_args) -> MutableMapping[str, Any]:
         self._log_debug("GET %s", url)
-        response = self.session.get(url)
+        response = self.session.get(url, **kw_args)
         response.raise_for_status()
         return response.json()
 
-    def _fetch_bytes(self, url: str) -> bytes:
+    def _fetch_optional_json(self, url: str, **kw_args) -> MutableMapping[str, Any]:
+        self._log_debug("GET %s (optional)", url)
+        response = self.session.get(url, **kw_args)
+        if response.status_code == 403:
+            self._log_debug("Ignoring optional 403 response from %s", url)
+            return {}
+        response.raise_for_status()
+        return response.json()
+
+    def _fetch_bytes(self, url: str, **kw_args) -> bytes:
         self._log_debug("GET %s (bytes)", url)
-        response = self.session.get(url)
+        response = self.session.get(url, **kw_args)
         response.raise_for_status()
         return response.content
 

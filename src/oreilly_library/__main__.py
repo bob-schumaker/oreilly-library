@@ -23,6 +23,7 @@ Options:
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from logging import getLogger
@@ -42,6 +43,7 @@ from oreilly_library.epub_builder import EpubBuilder
 from oreilly_library.epub_downloader import EpubDownloader
 
 PATH = os.environ.get("SAFARIBOOKS_PATH") or "working"
+DEFAULT_CHROME_VERSION = "147.0.7727.138"
 
 
 class oreilly_loader:
@@ -91,13 +93,16 @@ class oreilly_loader:
             self.session = requests.Session()
             cookie_data = self._ensure_cookies()
             self._apply_cookie_data(cookie_data)
+            chrome_user_agent = self._build_chrome_user_agent()
             headers = {
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Encoding": "gzip, deflate",
-                "Referer": "https://learning.oreilly.com/login/unified/?next=/home/",
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/avif,image/webp,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://learning.oreilly.com/",
                 "Upgrade-Insecure-Requests": "1",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/90.0.4430.212 Safari/537.36",
+                "User-Agent": chrome_user_agent,
             }
             self.session.headers.update(headers)
 
@@ -209,6 +214,39 @@ class oreilly_loader:
         return False
 
     @staticmethod
+    def _detect_chrome_version() -> str:
+        chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        try:
+            result = subprocess.run(
+                [chrome_bin, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except OSError:
+            return DEFAULT_CHROME_VERSION
+        except subprocess.SubprocessError:
+            return DEFAULT_CHROME_VERSION
+
+        if result.returncode != 0:
+            return DEFAULT_CHROME_VERSION
+
+        parts = result.stdout.strip().split()
+        if not parts:
+            return DEFAULT_CHROME_VERSION
+        return parts[-1]
+
+    @classmethod
+    def _build_chrome_user_agent(cls) -> str:
+        chrome_version = cls._detect_chrome_version()
+        return (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{chrome_version} Safari/537.36"
+        )
+
+    @staticmethod
     def _normalize_browser_name(
         browser: str | None,
         *,
@@ -310,9 +348,10 @@ class oreilly_loader:
                 "Install it with 'pip install selenium' or provide a cookie file."
             ) from exc
 
-        if self._login != "chrome":
+        browser_name = self._login[0]
+        if browser_name != "chrome":
             raise RuntimeError(
-                f"Unsupported browser '{self._login}'. Only 'chrome' is currently supported."
+                f"Unsupported browser '{browser_name}'. Only 'chrome' is currently supported."
             )
 
         chrome_options = ChromeOptions()
@@ -334,7 +373,7 @@ class oreilly_loader:
                 "OREILLY_LOGIN_URL", "https://learning.oreilly.com/"
             )
             self.logger.warning(
-                f"Cookie file not found. Launching {self._login} to collect cookies...",
+                f"Cookie file not found. Launching {browser_name} to collect cookies...",
             )
             driver.get(login_url)
             if self._verbose:
