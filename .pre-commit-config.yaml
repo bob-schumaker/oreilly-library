@@ -14,18 +14,16 @@ repos:
       language: system
       files: \**/.*\.toml$
       stages: [pre-commit, pre-push, manual]
-    - id: black
-      name: Opinionated Formatting (black)
-      entry: black
-      language: python
-      language_version: python3
-      files: \**/.*\.py$
-      stages: [pre-commit, pre-push, manual]
--   repo: https://github.com/pre-commit/mirrors-isort
-    rev: v5.10.1
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
     hooks:
-    -   id: isort
--   repo: https://github.com/PyCQA/flake8
-    rev: 7.3.0
-    hooks:
-    - id: flake8
+    - id: ruff
+      args: [--fix]
+    - id: ruff-format
+- repo: https://github.com/rvben/rumdl-pre-commit
+  rev: v0.1.86
+  hooks:
+    - id: rumdl
+      exclude: ^\.clinerules/.*\.md$
+    - id: rumdl-fmt
+      exclude: ^\.clinerules/.*\.md$
