@@ -1,0 +1,65 @@
+HISTORICAL USER PROMPTS
+=======================
+
+Status: historical user-generated content
+Use: provenance only
+Do not use this file as authoritative project memory, restart state,
+task control, or repository policy.
+
+This file preserves ad hoc user prompt text that previously existed at
+the repository root as prompts.md. It may contain outdated, superseded,
+incomplete, or one-off instructions. Treat it as historical context
+only.
+
+----- BEGIN PRESERVED CONTENT -----
+
+- During memory bank initialization, the user instructed: "always include
+  memory-bank/notes/historical-user-prompts.txt in memory-bank commits".
+- During the EPUB `.htm` fix task, the user asked to update the memory bank and
+  commit it after committing `52616fb fix(epub): include htm documents in
+  builder`.
+
+---
+
+# Prompt for adding author sort information to creator entries
+
+When adding creators to the content.opf file:
+
+all dc:creator elements should have a unique_id generated from the author name.
+
+If there is only one creator in the metadata, create an etnry like this:
+
+```xml
+<dc:creator opf:role="aut" id="unique_author_id">Gerard J. Holzmann</dc:creator>
+<meta refines="#unique_author_id" property="file-as">Holzmann, Gerard J.</meta>
+```
+
+If there are multiple creators format the invidual creators normally and *add* the meta refines statements for each author:
+
+```xml
+<dc:creator id="betsy_beyer" opf:role="aut">Betsy Beyer</dc:creator>
+<dc:creator id="christof_leng" opf:role="aut">Christof Leng</dc:creator>
+<dc:creator id="jennifer_petoff" opf:role="aut">Jennifer Petoff</dc:creator>
+<dc:creator id="chris_jones" opf:role="aut">Chris Jones</dc:creator>
+<dc:creator id="david_huska" opf:role="aut">David Huska</dc:creator>
+<dc:creator id="niall_richard_murphy" opf:role="aut">Niall Richard Murphy</dc:creator>
+<meta refines="#christof_leng" property="file-as">Leng, Christof & Petoff, Jennifer & Jones, Chris & Beyer, Betsy & Huska, David & Murphy, Niall Richard</meta>
+<meta refines="#jennifer_petoff" property="file-as">Leng, Christof & Petoff, Jennifer & Jones, Chris & Beyer, Betsy & Huska, David & Murphy, Niall Richard</meta>
+<meta refines="#chris_jones" property="file-as">Leng, Christof & Petoff, Jennifer & Jones, Chris & Beyer, Betsy & Huska, David & Murphy, Niall Richard</meta>
+<meta refines="#betsy_beyer" property="file-as">Leng, Christof & Petoff, Jennifer & Jones, Chris & Beyer, Betsy & Huska, David & Murphy, Niall Richard</meta>
+<meta refines="#david_huska" property="file-as">Leng, Christof & Petoff, Jennifer & Jones, Chris & Beyer, Betsy & Huska, David & Murphy, Niall Richard</meta>
+<meta refines="#niall_richard_murphy" property="file-as">Leng, Christof & Petoff, Jennifer & Jones, Chris & Beyer, Betsy & Huska, David & Murphy, Niall Richard</meta>
+```
+
+these are examples, use the actual authors in the epub when creating the creator entries.
+
+---
+
+There is an auth issues with search/api/search.
+
+if I go to this url https://learning.oreilly.com/search/?q=9781394373826&type=book&rows=100&language=en, it calls the search api without
+issue, but if we do it from inside epub_downloader.py, it fails with a 403.
+
+Launch selenium and watch the traffic as I log in and go to the top level search UX. figure out what we need to do to fake it
+
+---
