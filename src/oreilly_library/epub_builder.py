@@ -34,6 +34,7 @@ from ebooklib import epub
 # Ensure key MIME types are registered with the mimetypes module.
 mimetypes.init()
 mimetypes.add_type("application/xhtml+xml", ".xhtml")
+mimetypes.add_type("application/xhtml+xml", ".htm")
 mimetypes.add_type("image/jpeg", ".jpg")
 mimetypes.add_type("image/jpeg", ".jpeg")
 mimetypes.add_type("image/png", ".png")
@@ -42,6 +43,9 @@ mimetypes.add_type("font/ttf", ".ttf")
 mimetypes.add_type("application/vnd.ms-opentype", ".otf")
 mimetypes.add_type("font/woff", ".woff")
 mimetypes.add_type("font/woff2", ".woff2")
+
+HTML_SUFFIXES = {".xhtml", ".html", ".htm"}
+HTML_GLOB_EXTENSIONS = ("html", "htm", "xhtml")
 
 
 @dataclass(slots=True)
@@ -318,7 +322,7 @@ class EpubBuilder:
             return None
 
         data = source_path.read_bytes()
-        if source_path.suffix.lower() in {".xhtml", ".html"}:
+        if source_path.suffix.lower() in HTML_SUFFIXES:
             data = self._normalize_xhtml(data, manifest_item.href, identifier)
         elif source_path.suffix.lower() == ".css":
             data = self._normalize_css(data, manifest_item.href, identifier)
@@ -535,7 +539,7 @@ class EpubBuilder:
                         self._warn("Spine references missing file: %s", filename)
                 if resolved:
                     resolved_set = {path.resolve() for path in resolved}
-                    for html_ext in ("html", "xhtml"):
+                    for html_ext in HTML_GLOB_EXTENSIONS:
                         for path in sorted(text_dir.glob(f"*.{html_ext}")):
                             candidate = path.resolve()
                             if candidate not in resolved_set:
@@ -550,7 +554,9 @@ class EpubBuilder:
             return []
 
         files = sorted(
-            path for pattern in ("*.xhtml", "*.html") for path in text_dir.glob(pattern)
+            path
+            for html_ext in HTML_GLOB_EXTENSIONS
+            for path in text_dir.glob(f"*.{html_ext}")
         )
         if not files:
             self._warn("No HTML or XHTML files found in %s", text_dir)
@@ -571,17 +577,14 @@ class EpubBuilder:
         ) -> None:
             nonlocal nav_source_href
 
-            if (
-                path.suffix.lower() in {".xhtml", ".html"}
-                and path.stem.lower() == "nav"
-            ):
+            if path.suffix.lower() in HTML_SUFFIXES and path.stem.lower() == "nav":
                 nav_source_href = href
                 return
 
             item_id = self._manifest_id_from_href(href)
             media_type = self._guess_media_type(path)
             item_properties = list(properties or [])
-            if path.suffix.lower() in {".xhtml", ".html"}:
+            if path.suffix.lower() in HTML_SUFFIXES:
                 item_properties.extend(self._detect_document_properties(path))
             if cover_image_href and href == cover_image_href:
                 item_properties.append("cover-image")
@@ -598,7 +601,7 @@ class EpubBuilder:
 
         text_dir = self._find_optional_dir("xhtml", "text")
         if text_dir is not None:
-            for html_ext in ("html", "xhtml"):
+            for html_ext in HTML_GLOB_EXTENSIONS:
                 for path in sorted(text_dir.glob(f"*.{html_ext}")):
                     register(self._href_from_path(path), path)
         else:
@@ -912,7 +915,7 @@ class EpubBuilder:
             return path.name
 
     def _guess_media_type(self, path: Path) -> str:
-        if path.suffix.lower() in {".xhtml", ".html"}:
+        if path.suffix.lower() in HTML_SUFFIXES:
             return "application/xhtml+xml"
         if path.suffix.lower() == ".otf":
             return "application/vnd.ms-opentype"
@@ -1288,9 +1291,7 @@ class EpubBuilder:
 
             quote = match.group("quote")
             name = match.group("name")
-            return (
-                f"<a{attrs}name={quote}{name}{quote}" f" id={quote}{name}{quote}{rest}>"
-            )
+            return f"<a{attrs}name={quote}{name}{quote} id={quote}{name}{quote}{rest}>"
 
         text = anchor_pattern.sub(_promote_anchor, text)
 
@@ -1712,7 +1713,7 @@ class EpubBuilder:
 
                     data = archive_contents[name]
                     suffix = PurePosixPath(name).suffix.lower()
-                    if suffix in {".xhtml", ".html"}:
+                    if suffix in HTML_SUFFIXES:
                         data = self._cleanup_output_document(
                             data,
                             name,
@@ -1776,7 +1777,7 @@ class EpubBuilder:
         )
 
         for name, data in archive_contents.items():
-            if PurePosixPath(name).suffix.lower() not in {".xhtml", ".html"}:
+            if PurePosixPath(name).suffix.lower() not in HTML_SUFFIXES:
                 continue
             try:
                 text = data.decode("utf-8")
@@ -2294,7 +2295,7 @@ class EpubBuilder:
             return self._style_dir_name()
         if suffix in {".ttf", ".otf", ".woff", ".woff2", ".eot"}:
             return self._font_dir_name()
-        if suffix in {".xhtml", ".html"}:
+        if suffix in HTML_SUFFIXES:
             return self._text_dir_name()
         return None
 
