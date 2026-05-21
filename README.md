@@ -19,6 +19,7 @@ with `ebooklib`.
 - Normalize downloaded XHTML/CSS and repair common markup issues
 - Preserve metadata such as title, authors, publishers, TOC, and spine order
 - Generate a synthetic cover page when a cover document is missing
+- Track downloaded early-release books and check them for upstream updates
 - Optionally run `epubcheck` after building
 - Reuse a saved cookies file or launch a Selenium-based login flow
 
@@ -65,12 +66,18 @@ Supported cookie formats:
 - `SAFARIBOOKS_PATH`: base working directory used when `--output-dir` is not set
 - `OREILLY_LOGIN_URL`: override the login page opened by Selenium
 
+Early-release tracking is stored in `~/.cache/oreilly-early-release.db`.
+
 ## Command-line usage
 
 ```text
-oreilly-library [--verbose] [--debug] [--check] [--clean] [--build] \
+oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] \
                 [--output-dir=OUTPUT] [--cookie-file=FILE] \
                 [--login=BROWSER] ISBN...
+
+oreilly-library --check [--fetch] [--verbose] [--debug] \
+                [--output-dir=OUTPUT] [--cookie-file=FILE] \
+                [--login=BROWSER]
 ```
 
 ### Arguments
@@ -80,11 +87,15 @@ oreilly-library [--verbose] [--debug] [--check] [--clean] [--build] \
 ### Options
 
 - `--browser`: find any Safari book links in browser tabs (mac-only, Chrome-only)
-- `--build`: rebuild EPUBs from previously downloaded local files without downloading again
+- `--build`: rebuild EPUBs from previously downloaded local files without
+  downloading again
 - `--output-dir=OUTPUT`: write downloaded assets and generated EPUBs here
 - `--cookie-file=FILE`: load cookies from a JSON file
-- `--login=BROWSER`: force a fresh Selenium login with the selected browser (`chrome` only)
-- `--check`: run `epubcheck` after building each EPUB
+- `--login=BROWSER`: force a fresh Selenium login with the selected browser
+  (`chrome` only)
+- `--epubcheck`: run `epubcheck` after building each EPUB
+- `--check`: check tracked early-release books for updated metadata
+- `--fetch`: with `--check`, download updated books and refresh tracked timestamps
 - `--clean`: run Calibre `ebook-polish` after building each EPUB
 - `--verbose`: show progress messages
 - `--debug`: show detailed debug logging
@@ -122,8 +133,28 @@ poetry run oreilly-library --login=chrome 9781718504417
 ### Validate the resulting EPUB with epubcheck
 
 ```bash
-poetry run oreilly-library --check 9781718504417
+poetry run oreilly-library --epubcheck 9781718504417
 ```
+
+### Check tracked early-release books for updates
+
+```bash
+poetry run oreilly-library --check
+```
+
+The checker reads `~/.cache/oreilly-early-release.db`, fetches fresh metadata
+for each tracked book, and prints entries whose `last_modified_time` has
+changed. If a tracked book is no longer marked `roughcut`, it is removed from
+the tracker.
+
+### Fetch updated early-release books
+
+```bash
+poetry run oreilly-library --check --fetch
+```
+
+When `--fetch` is supplied, each changed tracked book is downloaded and rebuilt,
+then its stored `last_modified_time` is updated after the fetch completes.
 
 ### Rebuild an EPUB from previously downloaded files only
 
@@ -165,7 +196,8 @@ The downloader:
 3. Downloads all referenced files such as XHTML, images, CSS, and fonts
 4. Normalizes downloaded resources for local EPUB packaging
 5. Builds an EPUB archive with `ebooklib`
-6. Optionally runs `epubcheck`
+6. Records the book in the early-release tracker if `roughcut` is true
+7. Optionally runs `epubcheck`
 
 With `--build`, steps 1-4 are skipped and the tool rebuilds directly from an
 existing local extraction.
@@ -236,7 +268,7 @@ Useful files:
 ## Notes and limitations
 
 - Selenium login currently supports **Chrome only**
-- `--check` requires `epubcheck` (or `epubchecker`) to be installed separately
+- `--epubcheck` requires `epubcheck` (or `epubchecker`) to be installed separately
 - Output quality depends on the structure and completeness of O'Reilly source
   assets
 - Some books may require additional cleanup if upstream content is malformed

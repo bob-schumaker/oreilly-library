@@ -80,6 +80,7 @@ class EpubDownloader:
         self._verbose = bool(verbose) and not bool(debug)
         self._debug = bool(debug)
         self.logger = logger or logging.getLogger(__name__)
+        self.book_info: MutableMapping[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -95,11 +96,11 @@ class EpubDownloader:
 
         self._log_info("Fetching metadata from %s", self._metadata_url)
         book_info = self.fetch_bookinfo()
+        self.book_info = book_info
         self._ensure_named_destination(book_info)
         metadata_path = self.destination / f"{self.identifier}.json"
-        if not metadata_path.exists():
-            self._log_debug("Persisting metadata to %s", metadata_path)
-            self._write_json(book_info, metadata_path)
+        self._log_debug("Persisting metadata to %s", metadata_path)
+        self._write_json(book_info, metadata_path)
 
         self._log_info("Downloading related documents")
         self._download_related_documents(book_info)

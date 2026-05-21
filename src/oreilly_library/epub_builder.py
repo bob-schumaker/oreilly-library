@@ -2061,7 +2061,7 @@ class EpubBuilder:
         if checker is None:
             raise RuntimeError(
                 "epubcheck validation was requested, but no epubcheck executable "
-                "was found in PATH. Install epubcheck and retry, or omit --check."
+                "was found in PATH. Install epubcheck and retry, or omit --epubcheck."
             )
 
         checker_name, checker_path = checker

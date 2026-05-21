@@ -3,7 +3,8 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--check] [--clean] [--build] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
+    oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
+    oreilly-library --check [--fetch] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
 
 Arguments:
     ISBN            Look for these books
@@ -14,7 +15,9 @@ Options:
     --output-dir=OUTPUT Put the output files here. [Default: working/Books]
     --cookie-file=FILE  Use cookies from FILE. If absent, start a Selenium login flow.
     --login=BROWSER     Force Selenium login to refresh cookies using BROWSER.
-    --check             Run epubcheck validation after building each EPUB.
+    --epubcheck         Run epubcheck validation after building each EPUB.
+    --check             Check tracked early-release books for updated metadata.
+    --fetch             Fetch updated books found by --check and update tracking metadata.
     --clean             Run Calibre ebook-polish cleanup after building each EPUB.
     --verbose           Make some noise
     --debug             Make a lot of noise
@@ -28,7 +31,7 @@ import sys
 import time
 from logging import getLogger
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import requests
 from cobblerslib import general
@@ -41,6 +44,13 @@ if sys.platform == "darwin":
 
 from oreilly_library.epub_builder import EpubBuilder
 from oreilly_library.epub_downloader import EpubDownloader
+from oreilly_library.early_release_tracker import (
+    EarlyReleaseTracker,
+    TrackedBook,
+    find_updated_books,
+    metadata_is_roughcut,
+    tracked_book_from_metadata,
+)
 
 PATH = os.environ.get("SAFARIBOOKS_PATH") or "working"
 DEFAULT_CHROME_VERSION = "147.0.7727.138"
@@ -54,6 +64,8 @@ class oreilly_loader:
         isbns: Optional[Sequence[str]] = None,
         output_dir: Optional[str] = None,
         check: bool | None = None,
+        epubcheck: bool | None = None,
+        fetch: bool | None = None,
         clean: bool | None = None,
         build: bool | None = None,
         verbose: bool | None = None,
@@ -63,24 +75,32 @@ class oreilly_loader:
         login: str | bool | None = None,
         **kwargs,
     ) -> None:
+        self._check_updates = bool(check)
+        self._fetch_updates = bool(fetch)
+        if self._fetch_updates and not self._check_updates:
+            raise ValueError("--fetch requires --check.")
+        if self._check_updates and build:
+            raise ValueError("--check cannot be combined with --build.")
+
         if isinstance(isbns, str):
             isbns = [isbns]
         elif isinstance(isbns, Iterable):
             isbns = list(isbns)
         if not isbns:
-            if not browser:
+            if not browser and not self._check_updates:
                 raise ValueError("No ISBN identifiers or --browser flag provided.")
             self._identifiers = []
         else:
             self._identifiers = list(isbns)
         self._output_dir = output_dir
-        self._check = bool(check)
+        self._epubcheck = bool(epubcheck)
         self._clean = bool(clean)
         self._build = bool(build)
         self._browser = browser
         self._verbose = bool(verbose)
         self._debug = bool(debug)
         self.logger = getLogger(self.__class__.__name__)
+        self._tracker = EarlyReleaseTracker()
         cookies_env = os.environ.get("SAFARICOOKIES_PATH")
         self._cookies_file = Path(
             cookie_file or cookies_env or os.path.join(PATH, "cookies.json")
@@ -89,22 +109,8 @@ class oreilly_loader:
             login=login,
         )
         self.session: requests.Session | None = None
-        if not self._build:
-            self.session = requests.Session()
-            cookie_data = self._ensure_cookies()
-            self._apply_cookie_data(cookie_data)
-            chrome_user_agent = self._build_chrome_user_agent()
-            headers = {
-                "Accept": (
-                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
-                    "image/avif,image/webp,*/*;q=0.8"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://learning.oreilly.com/",
-                "Upgrade-Insecure-Requests": "1",
-                "User-Agent": chrome_user_agent,
-            }
-            self.session.headers.update(headers)
+        if not self._build and not self._check_updates:
+            self._initialize_session()
 
     def download_epub(self, identifier: str, output_dir: Optional[str] = None) -> None:
         """Download and build an EPUB, or rebuild it from local files."""
@@ -126,11 +132,12 @@ class oreilly_loader:
                 )
             builder = EpubBuilder(
                 source_dir,
-                check=self._check,
+                check=self._epubcheck,
                 verbose=self._verbose and not self._debug,
                 debug=self._debug,
             )
             builder.build_epub(clean=self._clean)
+            self._record_local_early_release(source_dir, identifier)
             return
 
         if self.session is None:
@@ -140,12 +147,15 @@ class oreilly_loader:
             identifier=identifier,
             session=self.session,
             output_dir=target_dir,
-            check=self._check,
+            check=self._epubcheck,
             clean=self._clean,
             verbose=self._verbose and not self._debug,
             debug=self._debug,
         )
         downloader.download_and_build()
+
+        if downloader.book_info:
+            self._sync_early_release_metadata(downloader.book_info, identifier)
 
     def _resolve_existing_source_dir(self, identifier: str, base_dir: Path) -> Path:
         candidates: list[Path] = []
@@ -213,6 +223,80 @@ class oreilly_loader:
 
         return False
 
+    def _record_local_early_release(self, source_dir: Path, identifier: str) -> None:
+        metadata = self._load_book_metadata(source_dir, identifier)
+        if metadata is not None:
+            self._sync_early_release_metadata(metadata, identifier)
+
+    def _sync_early_release_metadata(
+        self,
+        metadata: Mapping[str, Any],
+        identifier: str,
+    ) -> None:
+        if metadata_is_roughcut(metadata):
+            self._record_early_release_metadata(metadata, identifier)
+            return
+        self._tracker.delete(identifier)
+
+    def _record_early_release_metadata(
+        self,
+        metadata: Mapping[str, Any],
+        identifier: str,
+    ) -> None:
+        tracked_book = tracked_book_from_metadata(
+            metadata,
+            fallback_identifier=identifier,
+        )
+        if tracked_book is None:
+            self.logger.warning(
+                "Unable to track early-release metadata for %s; required fields missing.",
+                identifier,
+            )
+            return
+        self._tracker.upsert(tracked_book)
+
+    def _load_book_metadata(
+        self,
+        source_dir: Path,
+        identifier: str,
+    ) -> Mapping[str, Any] | None:
+        candidate_paths = [source_dir / f"{identifier}.json"]
+        candidate_paths.extend(sorted(source_dir.glob("*.json")))
+        seen: set[Path] = set()
+        for metadata_path in candidate_paths:
+            if metadata_path in seen:
+                continue
+            seen.add(metadata_path)
+            try:
+                with metadata_path.open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except OSError:
+                continue
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, Mapping) and self._metadata_matches_identifier(
+                payload,
+                identifier,
+            ):
+                return payload
+        return None
+
+    def _metadata_matches_identifier(
+        self,
+        metadata: Mapping[str, Any],
+        identifier: str,
+    ) -> bool:
+        known_identifiers = {
+            str(value)
+            for value in (
+                metadata.get("identifier"),
+                metadata.get("isbn"),
+                metadata.get("id"),
+            )
+            if value is not None
+        }
+        return identifier in known_identifiers
+
     @staticmethod
     def _detect_chrome_version() -> str:
         chrome_bin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -267,9 +351,30 @@ class oreilly_loader:
             return self._normalize_browser_name(login, fallback=None), True
         return "chrome", bool(login)
 
+    def _initialize_session(self) -> None:
+        if self.session is not None:
+            return
+        self.session = requests.Session()
+        cookie_data = self._ensure_cookies()
+        self._apply_cookie_data(cookie_data)
+        chrome_user_agent = self._build_chrome_user_agent()
+        headers = {
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "image/avif,image/webp,*/*;q=0.8"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://learning.oreilly.com/",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": chrome_user_agent,
+        }
+        self.session.headers.update(headers)
+
     def run(self) -> int:
         if self._output_dir and not Path(self._output_dir).exists():
             Path(self._output_dir).mkdir(parents=True, exist_ok=True)
+        if self._check_updates:
+            return self._run_early_release_check()
         if self._browser:
             for tab in app("Google Chrome").windows[0].tabs():
                 url = tab.URL()
@@ -289,6 +394,69 @@ class oreilly_loader:
         for identifier in iterator:
             self.download_epub(identifier, output_dir=self._output_dir)
         return 0
+
+    def _run_early_release_check(self) -> int:
+        tracked_books = self._tracker.list_books()
+        if not tracked_books:
+            print("No early-release books are currently tracked.")
+            return 0
+
+        self._initialize_session()
+
+        remote_books: dict[str, TrackedBook] = {}
+        iterator = tracked_books
+        if len(tracked_books) > 1 and not self._verbose and not self._debug:
+            iterator = tqdm(tracked_books)
+        for tracked in iterator:
+            metadata = self._fetch_remote_book_metadata(tracked.book_id)
+            if not metadata_is_roughcut(metadata):
+                self._tracker.delete(tracked.book_id)
+                print(
+                    f"{tracked.book_title} ({tracked.book_id}) is no longer "
+                    "an early release; removed from tracking."
+                )
+                continue
+            remote = tracked_book_from_metadata(
+                metadata,
+                fallback_identifier=tracked.book_id,
+            )
+            if remote is not None:
+                remote_books[tracked.book_id] = remote
+
+        updated_books = find_updated_books(tracked_books, remote_books)
+        if not updated_books:
+            print("No tracked early-release books have updates.")
+            return 0
+
+        for updated in updated_books:
+            print(
+                f"{updated.remote.book_title} ({updated.tracked.book_id}): "
+                f"{updated.tracked.last_modified_time} -> "
+                f"{updated.remote.last_modified_time}"
+            )
+
+        if self._fetch_updates:
+            for updated in updated_books:
+                self.download_epub(updated.tracked.book_id, output_dir=self._output_dir)
+                self._tracker.upsert(updated.remote)
+
+        return 0
+
+    def _fetch_remote_book_metadata(self, identifier: str) -> Mapping[str, Any]:
+        if self.session is None:
+            raise RuntimeError("Authenticated session was not initialized.")
+        downloader = EpubDownloader(
+            identifier=identifier,
+            session=self.session,
+            output_dir=Path(self._output_dir)
+            if self._output_dir
+            else Path(PATH) / "Books",
+            check=False,
+            clean=False,
+            verbose=self._verbose and not self._debug,
+            debug=self._debug,
+        )
+        return downloader.fetch_bookinfo()
 
     def _ensure_cookies(self) -> list[dict] | dict:
         if self._login[1]:
