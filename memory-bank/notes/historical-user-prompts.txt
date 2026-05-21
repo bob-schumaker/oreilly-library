@@ -63,3 +63,11 @@ issue, but if we do it from inside epub_downloader.py, it fails with a 403.
 Launch selenium and watch the traffic as I log in and go to the top level search UX. figure out what we need to do to fake it
 
 ---
+
+- design a small SQLite database that will live in ~/.cache/oreilly-early-release.db with the following fields
+  - book id
+  - book title
+  - last modified time
+- design a change to `orelly-library` to record all "early release" books (roughcut == True) in the database
+- add a "--check" option that lists all of the tracked books that have an updated last modified time
+  - add a "--fetch" suboption that fetches the updated books and updates the last modified time in the database

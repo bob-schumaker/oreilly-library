@@ -14,6 +14,8 @@
 - `tqdm` for progress display when processing multiple identifiers.
 - `ebooklib` for EPUB construction.
 - `appscript` for macOS browser-tab access when `--browser` is used.
+- `sqlite3` from the Python standard library for early-release tracking in
+  `~/.cache/oreilly-early-release.db`.
 
 ## Development and Tooling
 
@@ -27,7 +29,7 @@
 ## External Tools
 
 - Google Chrome and a compatible Chrome WebDriver are needed for Selenium login.
-- `epubcheck` or `epubchecker` is required when using `--check`.
+- `epubcheck` or `epubchecker` is required when using `--epubcheck`.
 - Calibre's `ebook-polish` is used when `--clean` is requested and the tool is
   discoverable.
 

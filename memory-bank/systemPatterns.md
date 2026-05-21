@@ -8,6 +8,8 @@
 - `src/oreilly_library/epub_downloader.py` owns authenticated API access,
   metadata aggregation, related-document pagination, asset downloads, cover
   fallback handling, and local download-folder preparation.
+- `src/oreilly_library/early_release_tracker.py` owns the lightweight SQLite
+  persistence layer for early-release tracking.
 - `src/oreilly_library/epub_builder.py` owns EPUB assembly from a local source
   directory, including metadata extraction, manifest generation, TOC/spine
   construction, XHTML/CSS normalization, cover handling, archive cleanup, and
@@ -23,7 +25,9 @@
 3. `EpubDownloader` fetches O'Reilly metadata and related JSON documents.
 4. `EpubDownloader` downloads static assets into a per-book working directory.
 5. `EpubBuilder` reads that working directory and writes an EPUB archive.
-6. Optional post-processing runs `ebook-polish` and/or `epubcheck`.
+6. CLI metadata sync records `roughcut == True` books in the early-release
+   tracker and removes rows for books that are no longer roughcuts.
+7. Optional post-processing runs `ebook-polish` and/or `epubcheck`.
 
 ## Design Patterns and Conventions
 
@@ -36,6 +40,10 @@
   normalization, media-type detection, and archive cleanup in sync when changing
   that set.
 - Pagination handling aggregates API payloads before persisting local JSON.
+- Early-release tracking intentionally stores only the user-requested minimal
+  fields: book id, book title, and remote `last_modified_time`.
+- The CLI uses `--check` for early-release update checks; EPUB validation is
+  exposed separately as `--epubcheck`.
 - Warnings are collected and emitted by the builder rather than immediately
   aborting for every missing optional asset.
 - Public APIs accept `Path` or string-like paths where practical and normalize

@@ -12,16 +12,23 @@
 - `EpubBuilder` now treats `.htm`, `.html`, and `.xhtml` files consistently as
   XHTML/HTML content so source packages with `.htm` chapters are included in the
   EPUB manifest/spine and have their image references normalized.
+- Early-release tracking works for downloaded books whose metadata has
+  `roughcut == True`, using `~/.cache/oreilly-early-release.db` to store book id,
+  title, and last modified time.
+- CLI `--check` now lists tracked early-release books with changed remote
+  `last_modified_time`; `--check --fetch` fetches updated books and refreshes
+  tracker state.
+- The previous EPUB validation option is now `--epubcheck`.
 - Package exports expose `EpubBuilder`, `EpubDownloader`, and `DownloadResult`.
 
 ## In Flight
 
-- The `.htm` builder fix is complete and committed as `52616fb fix(epub):
-  include htm documents in builder`.
-- Memory-bank context is being refreshed to record the `.htm` fix and related
-  investigation findings.
+- The early-release tracking implementation is complete and committed as
+  `1c47a4a feat(cli): track early-release updates`.
+- Memory-bank context is being refreshed to record the early-release tracking
+  feature and validation findings.
 - The working tree contains pre-existing local changes and untracked files not
-  created by the `.htm` fix or memory-bank refresh.
+  created by the early-release tracking work or memory-bank refresh.
 
 ## Remaining
 
@@ -41,6 +48,8 @@
   manifest but never referenced by renderable content; this can be harmless
   source/package baggage rather than a display bug.
 - External validation and cleanup depend on locally installed tools such as
-  `epubcheck` and Calibre.
+  `epubcheck` and Calibre. The CLI flag for validation is now `--epubcheck`.
 - Authentication workflows depend on O'Reilly session behavior and ChromeDriver
   compatibility.
+- Early-release update checks require authenticated O'Reilly metadata access;
+  direct download tracking was verified with book id `9781098145842`.

@@ -2,30 +2,30 @@
 
 ## Current Focus
 
-- Maintain project context after fixing EPUB builder handling for books whose
-  chapter documents use `.htm` extensions.
+- Maintain project context after adding early-release tracking and update
+  checking to the CLI.
 
 ## Current Status
 
 - Done:
-  - Fixed `src/oreilly_library/epub_builder.py` so `.htm` documents are treated
-    as XHTML/HTML documents throughout manifest generation, spine discovery,
-    normalization, media-type detection, archive cleanup, and resource fallback
-    handling.
-  - Rebuilt `working/Books/Game Theory_ An Introduction, 2nd Edition
-    (9781118533895)/9781118533895.epub` and confirmed it now includes 29 HTML
-    documents, 27 `.htm` manifest entries, 4,593 image references, and no
-    unresolved local image/resource references.
-  - Investigated the 9 content-unreferenced images in that rebuilt EPUB and
-    determined they are source/package baggage rather than missing image
-    references; only `black_box.jpg` is a byte-identical duplicate of the
-    referenced `black-box.jpg`.
-  - Committed the builder fix as `52616fb fix(epub): include htm documents in
-    builder`.
+  - Added `src/oreilly_library/early_release_tracker.py` with SQLite persistence
+    at `~/.cache/oreilly-early-release.db` for `book_id`, `book_title`, and
+    `last_modified_time`.
+  - Repurposed CLI `--check` to check tracked early-release books for updated
+    remote `last_modified_time` values, and added `--fetch` to fetch changed
+    books.
+  - Renamed the previous EPUB validation flag from `--check` to `--epubcheck`.
+  - Wired direct download/build metadata sync so `roughcut == True` upserts the
+    tracker row and `roughcut != True` removes any existing row.
+  - Verified real metadata and direct-download tracking with early-release book
+    `9781098145842` (`High Performance Spark, 2nd Edition`).
+  - Committed the implementation as `1c47a4a feat(cli): track early-release
+    updates`.
 - In progress:
-  - Refreshing and committing memory-bank context for the completed `.htm` fix.
+  - Refreshing and committing memory-bank context for the completed
+    early-release tracking work.
 - Not started:
-  - No further builder changes are currently requested.
+  - No further early-release tracking changes are currently requested.
 
 ## Recent Context
 
@@ -38,6 +38,9 @@
 - Some upstream Wiley/O'Reilly source packages use `.htm` chapter files rather
   than `.html` or `.xhtml`; builder HTML handling should keep all three suffixes
   in sync.
+- Early-release tracking depends on O'Reilly metadata fields `roughcut` and
+  `last_modified_time` and uses the same authenticated session path as normal
+  metadata fetches.
 
 ## Next Steps
 
