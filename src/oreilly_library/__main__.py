@@ -404,14 +404,26 @@ class oreilly_loader:
         self._initialize_session()
 
         remote_books: dict[str, TrackedBook] = {}
+        result_messages: list[str] = []
         iterator = tracked_books
         if len(tracked_books) > 1 and not self._verbose and not self._debug:
             iterator = tqdm(tracked_books)
         for tracked in iterator:
-            metadata = self._fetch_remote_book_metadata(tracked.book_id)
+            try:
+                metadata = self._fetch_remote_book_metadata(tracked.book_id)
+            except requests.HTTPError as exc:
+                response = exc.response
+                if response is not None and response.status_code == 404:
+                    self._tracker.delete(tracked.book_id)
+                    result_messages.append(
+                        f"{tracked.book_title} ({tracked.book_id}) returned 404; "
+                        "removed from tracking."
+                    )
+                    continue
+                raise
             if not metadata_is_roughcut(metadata):
                 self._tracker.delete(tracked.book_id)
-                print(
+                result_messages.append(
                     f"{tracked.book_title} ({tracked.book_id}) is no longer "
                     "an early release; removed from tracking."
                 )
@@ -424,16 +436,21 @@ class oreilly_loader:
                 remote_books[tracked.book_id] = remote
 
         updated_books = find_updated_books(tracked_books, remote_books)
-        if not updated_books:
-            print("No tracked early-release books have updates.")
-            return 0
+        result_messages.extend(
+            f"{updated.remote.book_title} ({updated.tracked.book_id}): "
+            f"{updated.tracked.last_modified_time} -> "
+            f"{updated.remote.last_modified_time}"
+            for updated in updated_books
+        )
 
-        for updated in updated_books:
-            print(
-                f"{updated.remote.book_title} ({updated.tracked.book_id}): "
-                f"{updated.tracked.last_modified_time} -> "
-                f"{updated.remote.last_modified_time}"
-            )
+        if result_messages:
+            for message in result_messages:
+                print(message)
+        else:
+            print("No tracked early-release books have updates.")
+
+        if not updated_books:
+            return 0
 
         if self._fetch_updates:
             for updated in updated_books:
