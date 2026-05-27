@@ -19,6 +19,12 @@ only.
   commit it after committing `52616fb fix(epub): include htm documents in
   builder`.
 
+- During the early-release database refresh and check workflow fix, the user asked
+  to use `/Users/roschuma/Downloads/early_release.json` to update the early
+  access SQLite database, list missing ISBN and duplicate entries, remove tracked
+  books on 404 during `--check`, collect check results until after the progress
+  bar completes, then commit changes and update the memory bank.
+
 ---
 
 # Prompt for adding author sort information to creator entries

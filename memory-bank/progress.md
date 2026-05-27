@@ -15,18 +15,19 @@
 - Early-release tracking works for downloaded books whose metadata has
   `roughcut == True`, using `~/.cache/oreilly-early-release.db` to store book id,
   title, and last modified time.
-- CLI `--check` now lists tracked early-release books with changed remote
+- CLI `--check` lists tracked early-release books with changed remote
   `last_modified_time`; `--check --fetch` fetches updated books and refreshes
   tracker state.
+- During `--check`, tracked books that return HTTP 404 are removed from the
+  SQLite tracker and checking continues.
+- During `--check`, removal/update messages are collected during the progress
+  loop and displayed after iteration, avoiding progress bar disruption.
 - The previous EPUB validation option is now `--epubcheck`.
 - Package exports expose `EpubBuilder`, `EpubDownloader`, and `DownloadResult`.
 
 ## In Flight
 
-- The early-release tracking implementation is complete and committed as
-  `1c47a4a feat(cli): track early-release updates`.
-- Memory-bank context is being refreshed to record the early-release tracking
-  feature and validation findings.
+- No active implementation work is currently in progress.
 - The working tree contains pre-existing local changes and untracked files not
   created by the early-release tracking work or memory-bank refresh.
 
@@ -53,3 +54,6 @@
   compatibility.
 - Early-release update checks require authenticated O'Reilly metadata access;
   direct download tracking was verified with book id `9781098145842`.
+- Calibre-style early-release JSON snapshots may include rows without ISBNs and
+  duplicate ISBNs; the database refresh used ISBN as the tracker key, skipped
+  missing ISBNs, and kept the newest duplicate metadata by `last_modified`.
