@@ -26,11 +26,16 @@
     `/Users/roschuma/.cache/oreilly-early-release.20260527T212933Z.db.bak`.
   - Changed `oreilly-library --check` so tracked books that return HTTP 404 are
     removed from tracking instead of aborting the whole check.
-  - Changed `oreilly-library --check` to collect removal/update messages during
-    the progress loop and print them after iteration so the progress bar is not
+  - Changed `oreilly-library --check` to collect check results during the
+    progress loop and print them after iteration so the progress bar is not
     disrupted.
-  - Committed the latest check-workflow fix as `621940b fix(check): summarize
-    early-release check results`.
+  - Refined `oreilly-library --check` so it displays only books with changed
+    remote `last_modified_time`; 404 and non-roughcut removals are silent in
+    check output.
+  - Confirmed tracked timestamps are not updated by plain `--check`; timestamps
+    are refreshed only after `--check --fetch` downloads the updated book.
+  - Committed the latest check-output refinement as `fdd2a74 fix(check): only
+    report changed early releases`.
 - In progress:
   - No active implementation work is currently in progress.
 - Not started:

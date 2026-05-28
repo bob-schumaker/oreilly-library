@@ -23,7 +23,9 @@ only.
   to use `/Users/roschuma/Downloads/early_release.json` to update the early
   access SQLite database, list missing ISBN and duplicate entries, remove tracked
   books on 404 during `--check`, collect check results until after the progress
-  bar completes, then commit changes and update the memory bank.
+  bar completes, show only changed books during `--check`, avoid timestamp
+  updates unless `--fetch` downloads the book, then commit changes and update the
+  memory bank.
 
 ---
 

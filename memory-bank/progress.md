@@ -20,8 +20,12 @@
   tracker state.
 - During `--check`, tracked books that return HTTP 404 are removed from the
   SQLite tracker and checking continues.
-- During `--check`, removal/update messages are collected during the progress
-  loop and displayed after iteration, avoiding progress bar disruption.
+- During `--check`, result messages are collected during the progress loop and
+  displayed after iteration, avoiding progress bar disruption.
+- Plain `--check` displays only books whose remote `last_modified_time` changed;
+  404 and non-roughcut removals are silent in check output.
+- Tracked timestamps are not updated by plain `--check`; they are updated only
+  after `--check --fetch` downloads the updated book.
 - The previous EPUB validation option is now `--epubcheck`.
 - Package exports expose `EpubBuilder`, `EpubDownloader`, and `DownloadResult`.
 
