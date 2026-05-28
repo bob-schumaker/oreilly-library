@@ -415,18 +415,10 @@ class oreilly_loader:
                 response = exc.response
                 if response is not None and response.status_code == 404:
                     self._tracker.delete(tracked.book_id)
-                    result_messages.append(
-                        f"{tracked.book_title} ({tracked.book_id}) returned 404; "
-                        "removed from tracking."
-                    )
                     continue
                 raise
             if not metadata_is_roughcut(metadata):
                 self._tracker.delete(tracked.book_id)
-                result_messages.append(
-                    f"{tracked.book_title} ({tracked.book_id}) is no longer "
-                    "an early release; removed from tracking."
-                )
                 continue
             remote = tracked_book_from_metadata(
                 metadata,
