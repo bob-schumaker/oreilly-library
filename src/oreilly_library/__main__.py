@@ -34,10 +34,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import requests
-from cobblerslib import general
-from cobblerslib.general.docopt import docopt, docopt_arguments
-from cobblerslib.general.texthandling import text_input
 from tqdm import tqdm
+
+from oreilly_library.cobblerslib import docopt, docopt_arguments, general, text_input
 
 if sys.platform == "darwin":
     from appscript import app
