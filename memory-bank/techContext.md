@@ -9,7 +9,8 @@
 ## Runtime Dependencies
 
 - `requests` for HTTP sessions.
-- `cobblerslib[docopt]` for docopt-style CLI parsing and shared utilities.
+- `docopt-ng` plus package-local `oreilly_library.cobblerslib` compatibility
+  helpers for CLI parsing and logging setup.
 - `selenium` for interactive cookie capture through Chrome.
 - `tqdm` for progress display when processing multiple identifiers.
 - `ebooklib` for EPUB construction.

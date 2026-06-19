@@ -39,9 +39,9 @@ This repository is configured for Poetry.
 poetry install
 ```
 
-The project depends on `cobblerslib`, which is configured as a supplemental
-package source in `pyproject.toml`. If installation fails, verify that you can
-reach the configured package index.
+The CLI includes a small package-local compatibility module extracted from the
+unpublished `cobblerslib` helper library, so installation uses only public
+package dependencies.
 
 ## Authentication
 
