@@ -160,7 +160,9 @@ class EpubBuilder:
         return output_path
 
     def _run_ebook_polish(self, output_path: Path) -> None:
-        """Run Calibre's ebook-polish command when available."""
+        """Run Calibre cleanup commands when available."""
+
+        self._run_calibre_cleanup_epub(output_path)
 
         ebook_polish = self._find_ebook_polish()
         if ebook_polish is None:
@@ -198,6 +200,54 @@ class EpubBuilder:
         if self._verbose or self._debug:
             self._warn("ebook-polish cleaned %s", output_path.name)
 
+    def _run_calibre_cleanup_epub(self, output_path: Path) -> None:
+        """Run the bundled Calibre cleanup script through calibre-debug."""
+
+        calibre_debug = self._find_calibre_debug()
+        if calibre_debug is None:
+            self._warn(
+                "--clean was requested, but Calibre's calibre-debug executable was not found."
+            )
+            return
+
+        cleanup_script = Path(__file__).with_name("calibre_cleanup_epub.py")
+        if not cleanup_script.exists():
+            self._warn("Unable to find Calibre cleanup script: %s", cleanup_script)
+            return
+
+        command = [
+            calibre_debug,
+            "-e",
+            str(cleanup_script),
+            "--",
+            str(output_path),
+            "--no-backup",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:  # pragma: no cover - defensive
+            self._warn("Unable to run Calibre cleanup script: %s", exc)
+            return
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            message = stderr or stdout or "unknown error"
+            self._warn(
+                "Calibre cleanup script failed for %s: %s",
+                output_path.name,
+                message,
+            )
+            return
+
+        if self._verbose or self._debug:
+            self._warn("Calibre cleanup script cleaned %s", output_path.name)
+
     def _find_ebook_polish(self) -> Optional[str]:
         """Return the ebook-polish executable path if Calibre is available."""
 
@@ -206,6 +256,20 @@ class EpubBuilder:
             return executable
 
         macos_app_binary = Path("/Applications/calibre.app/Contents/MacOS/ebook-polish")
+        if macos_app_binary.exists():
+            return str(macos_app_binary)
+        return None
+
+    def _find_calibre_debug(self) -> Optional[str]:
+        """Return the calibre-debug executable path if Calibre is available."""
+
+        executable = shutil.which("calibre-debug")
+        if executable:
+            return executable
+
+        macos_app_binary = Path(
+            "/Applications/calibre.app/Contents/MacOS/calibre-debug"
+        )
         if macos_app_binary.exists():
             return str(macos_app_binary)
         return None
