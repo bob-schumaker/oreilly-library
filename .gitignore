@@ -1,7 +1,9 @@
 __pycache__
 tmp/
 working/
+dist/
 
 .vscode/
 example/
 .DS_Store
+graphify-out/
