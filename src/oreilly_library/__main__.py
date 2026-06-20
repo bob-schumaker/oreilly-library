@@ -4,7 +4,7 @@ consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
     oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
-    oreilly-library --check [--fetch] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
+    oreilly-library --check [--fetch] [--clean] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
 
 Arguments:
     ISBN            Look for these books
@@ -18,7 +18,7 @@ Options:
     --epubcheck         Run epubcheck validation after building each EPUB.
     --check             Check tracked early-release books for updated metadata.
     --fetch             Fetch updated books found by --check and update tracking metadata.
-    --clean             Run Calibre ebook-polish cleanup after building each EPUB.
+    --clean             Run Calibre ebook-polish cleanup after building each EPUB; with --check, prune 404 tracker rows.
     --verbose           Make some noise
     --debug             Make a lot of noise
 """
@@ -413,7 +413,8 @@ class oreilly_loader:
             except requests.HTTPError as exc:
                 response = exc.response
                 if response is not None and response.status_code == 404:
-                    self._tracker.delete(tracked.book_id)
+                    if self._clean:
+                        self._tracker.delete(tracked.book_id)
                     continue
                 raise
             if not metadata_is_roughcut(metadata):

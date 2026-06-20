@@ -75,7 +75,7 @@ oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] \
                 [--output-dir=OUTPUT] [--cookie-file=FILE] \
                 [--login=BROWSER] ISBN...
 
-oreilly-library --check [--fetch] [--verbose] [--debug] \
+oreilly-library --check [--fetch] [--clean] [--verbose] [--debug] \
                 [--output-dir=OUTPUT] [--cookie-file=FILE] \
                 [--login=BROWSER]
 ```
@@ -96,7 +96,8 @@ oreilly-library --check [--fetch] [--verbose] [--debug] \
 - `--epubcheck`: run `epubcheck` after building each EPUB
 - `--check`: check tracked early-release books for updated metadata
 - `--fetch`: with `--check`, download updated books and refresh tracked timestamps
-- `--clean`: run Calibre `ebook-polish` after building each EPUB
+- `--clean`: run Calibre `ebook-polish` after building each EPUB; with
+  `--check`, prune tracker rows whose remote metadata returns 404
 - `--verbose`: show progress messages
 - `--debug`: show detailed debug logging
 
@@ -145,7 +146,8 @@ poetry run oreilly-library --check
 The checker reads `~/.cache/oreilly-early-release.db`, fetches fresh metadata
 for each tracked book, and prints entries whose `last_modified_time` has
 changed. If a tracked book is no longer marked `roughcut`, it is removed from
-the tracker.
+the tracker. Books whose metadata returns 404 stay tracked unless `--clean` is
+also supplied.
 
 ### Fetch updated early-release books
 
