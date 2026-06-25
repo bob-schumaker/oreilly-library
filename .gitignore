@@ -2,6 +2,7 @@ __pycache__
 tmp/
 working/
 dist/
+technical.db
 
 .vscode/
 example/
