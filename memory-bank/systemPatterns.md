@@ -14,6 +14,10 @@
   directory, including metadata extraction, manifest generation, TOC/spine
   construction, XHTML/CSS normalization, cover handling, archive cleanup, and
   optional external validation/cleanup.
+- `src/oreilly_library/calibre_cleanup_epub.py` is a bundled helper script run
+  by Calibre's Python runtime for Edit Book-style EPUB cleanup.
+- `src/oreilly_library/cobblerslib.py` vendors the CLI/logging helper behavior
+  previously supplied by the private `cobblers` package.
 - `src/oreilly_library/__init__.py` exposes `EpubBuilder`, `EpubDownloader`, and
   `DownloadResult` as the public package interface.
 
@@ -27,7 +31,8 @@
 5. `EpubBuilder` reads that working directory and writes an EPUB archive.
 6. CLI metadata sync records `roughcut == True` books in the early-release
    tracker and removes rows for books that are no longer roughcuts.
-7. Optional post-processing runs `ebook-polish` and/or `epubcheck`.
+7. Optional post-processing runs the Calibre cleanup helper, `ebook-polish`,
+   and/or `epubcheck`.
 
 ## Design Patterns and Conventions
 
@@ -44,6 +49,11 @@
   fields: book id, book title, and remote `last_modified_time`.
 - The CLI uses `--check` for early-release update checks; EPUB validation is
   exposed separately as `--epubcheck`.
+- In early-release check mode, 404 tracker pruning is a cleanup operation gated
+  behind `--clean`; plain `--check` does not mutate rows solely because metadata
+  is missing.
+- In EPUB build/download mode, `--clean` first invokes the bundled Calibre
+  cleanup script through `calibre-debug`, then runs `ebook-polish` when found.
 - Warnings are collected and emitted by the builder rather than immediately
   aborting for every missing optional asset.
 - Public APIs accept `Path` or string-like paths where practical and normalize

@@ -2,8 +2,8 @@
 
 ## Current Focus
 
-- Maintain project context after updating early-release tracking data and
-  improving the CLI update-check workflow.
+- Maintain project context after recent CLI, Calibre cleanup, and packaging
+  maintenance work.
 
 ## Current Status
 
@@ -34,8 +34,14 @@
     check output.
   - Confirmed tracked timestamps are not updated by plain `--check`; timestamps
     are refreshed only after `--check --fetch` downloads the updated book.
-  - Committed the latest check-output refinement as `fdd2a74 fix(check): only
-    report changed early releases`.
+  - Gated early-release 404 tracker pruning behind `--check --clean`; plain
+    `--check` leaves 404 rows tracked.
+  - Vendored `oreilly_library.cobblerslib` so the package no longer depends on
+    the private `cobblers` dependency.
+  - Added a bundled Calibre cleanup script and wired `--clean` to run it through
+    `calibre-debug` before `ebook-polish`.
+  - Committed the latest functional change as `db6f4f5 Gate early-release 404
+    pruning behind clean`.
 - In progress:
   - No active implementation work is currently in progress.
 - Not started:
@@ -46,8 +52,9 @@
 - The project is a Poetry-managed Python CLI for downloading authorized
   O'Reilly book assets and rebuilding EPUBs.
 - Main implementation files are in `src/oreilly_library/`.
-- The working tree had pre-existing modified/untracked files before this task;
-  those should be treated as unrelated unless the user says otherwise.
+- The working tree currently has modified `poetry.lock` and `pyproject.toml`
+  plus untracked `bin/` and `technical.db`; treat them as unrelated unless the
+  user says otherwise.
 - Some upstream Wiley/O'Reilly source packages use `.htm` chapter files rather
   than `.html` or `.xhtml`; builder HTML handling should keep all three suffixes
   in sync.
@@ -56,6 +63,9 @@
   metadata fetches.
 - The JSON database refresh mapped `isbn` -> `book_id`, `title` ->
   `book_title`, and `last_modified` -> `last_modified_time`.
+- `--clean` has two meanings by mode: in build/download mode it runs Calibre EPUB
+  cleanup, while with `--check` it allows pruning tracked rows whose metadata
+  returns 404.
 
 ## Next Steps
 

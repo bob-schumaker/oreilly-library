@@ -24,16 +24,23 @@
   displayed after iteration, avoiding progress bar disruption.
 - Plain `--check` displays only books whose remote `last_modified_time` changed;
   404 and non-roughcut removals are silent in check output.
+- Plain `--check` leaves tracked books in place when remote metadata returns
+  404; `--check --clean` prunes those 404 tracker rows.
 - Tracked timestamps are not updated by plain `--check`; they are updated only
   after `--check --fetch` downloads the updated book.
 - The previous EPUB validation option is now `--epubcheck`.
+- `--clean` runs the bundled Calibre cleanup script through `calibre-debug`
+  before `ebook-polish`.
+- The package now vendors its `cobblerslib` CLI helpers under
+  `oreilly_library.cobblerslib` instead of depending on a private package.
 - Package exports expose `EpubBuilder`, `EpubDownloader`, and `DownloadResult`.
 
 ## In Flight
 
 - No active implementation work is currently in progress.
 - The working tree contains pre-existing local changes and untracked files not
-  created by the early-release tracking work or memory-bank refresh.
+  created by the committed implementation work or memory-bank refresh:
+  `poetry.lock`, `pyproject.toml`, `bin/`, and `technical.db`.
 
 ## Remaining
 
@@ -54,6 +61,8 @@
   source/package baggage rather than a display bug.
 - External validation and cleanup depend on locally installed tools such as
   `epubcheck` and Calibre. The CLI flag for validation is now `--epubcheck`.
+- Calibre cleanup requires Calibre's `calibre-debug`; `ebook-polish` remains a
+  later cleanup step when available.
 - Authentication workflows depend on O'Reilly session behavior and ChromeDriver
   compatibility.
 - Early-release update checks require authenticated O'Reilly metadata access;

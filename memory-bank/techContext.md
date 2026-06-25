@@ -9,8 +9,8 @@
 ## Runtime Dependencies
 
 - `requests` for HTTP sessions.
-- `docopt-ng` plus package-local `oreilly_library.cobblerslib` compatibility
-  helpers for CLI parsing and logging setup.
+- `docopt-ng` plus package-local `oreilly_library.cobblerslib` helpers for CLI
+  parsing and logging setup.
 - `selenium` for interactive cookie capture through Chrome.
 - `tqdm` for progress display when processing multiple identifiers.
 - `ebooklib` for EPUB construction.
@@ -31,8 +31,9 @@
 
 - Google Chrome and a compatible Chrome WebDriver are needed for Selenium login.
 - `epubcheck` or `epubchecker` is required when using `--epubcheck`.
-- Calibre's `ebook-polish` is used when `--clean` is requested and the tool is
-  discoverable.
+- Calibre's `calibre-debug` is used to run the bundled cleanup script when
+  `--clean` is requested for EPUB builds.
+- Calibre's `ebook-polish` runs after the bundled cleanup script when available.
 
 ## Environment Variables
 
@@ -48,3 +49,5 @@
 - After the `.htm` builder fix, unrelated local changes still included
   `pyproject.toml` plus several untracked repository files/directories; keep
   future commits narrowly staged unless the user expands scope.
+- After the Calibre cleanup and 404-pruning changes, unrelated local changes
+  still include `poetry.lock`, `pyproject.toml`, `bin/`, and `technical.db`.
