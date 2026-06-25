@@ -3,7 +3,7 @@ name = "oreilly-library"
 version = "0.1.0"
 description = "Download books from the O'Reilly library if you have access."
 authors = [
-    {name = "Bob Schumaker",email = "bob.schumaker@oracle.com"}
+    {name = "Bob Schumaker",email = "cobblers@pobox.com"}
 ]
 requires-python = ">=3.14"
 dependencies = [
