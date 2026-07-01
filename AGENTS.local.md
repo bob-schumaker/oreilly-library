@@ -23,3 +23,35 @@ Rules:
 - For project-specific graphify behavior, read the repo-local addon skill at
   `.agents/skills/graphify-noise-reduction/SKILL.md` before running `/graphify`.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+<!-- BEGIN MANAGED KNOWLEDGE-GRAPH ROUTING -->
+<!-- rumdl-disable MD041 -->
+## Knowledge-Graph Routing
+
+Use the narrowest concern owner; do not invoke every graph mechanically.
+
+| Need | First Choice | Boundary |
+|---|---|---|
+| Locate or read current source; trace exact calls | CodeGraph | Requires `.codegraph/`; otherwise use normal source tools |
+| Connect documentation, decisions, plans, and rationale | Graphify | Requires a curated `.graphifyignore` and knowledge-only graph |
+| Discover execution processes or assess change impact | GitNexus | Requires `.gitnexus/`; not a Git-history database |
+| Commits, PRs, blame, authorship, or ownership history | Git and SCM tooling | Do not route to the graph trio |
+
+For mixed questions, sequence Graphify for documented intent, CodeGraph for the
+exact implementation, GitNexus for change risk, and Git/SCM for provenance.
+Graph results are context evidence; tests, linters, and runtime behavior remain
+correctness authority.
+
+Load the corresponding installed skill before graph work:
+
+- `codegraph-source-navigation`
+- `graphify-knowledge-extraction`
+- `gitnexus-change-impact`
+- `knowledge-graph-bootstrap` for setup, repair, or instruction maintenance
+
+Do not initialize or refresh indexes during ordinary questions. Graphify corpus
+changes require reviewed, project-specific `.graphifyignore` curation. Refresh
+Graphify through the staged curation, validation, diagnostics, and snapshot
+promotion procedure in `graphify-knowledge-extraction`; preserve the accepted
+snapshot whenever any candidate gate fails.
+<!-- END MANAGED KNOWLEDGE-GRAPH ROUTING -->

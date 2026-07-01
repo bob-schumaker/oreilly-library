@@ -1,0 +1,35 @@
+# Graphify corpus: reviewed project knowledge only.
+/*
+
+!/AGENTS.md
+!/AGENTS.local.md
+!/README.md
+!/memory-bank/
+!/memory-bank/**
+
+# Generated graph artifacts are never semantic source corpus.
+/graphify-out/
+/.graphify-snapshots/
+
+# Keep admitted documentation trees free of source/config artifacts.
+**/*.py
+**/*.pyi
+**/*.js
+**/*.jsx
+**/*.ts
+**/*.tsx
+**/*.go
+**/*.rs
+**/*.java
+**/*.c
+**/*.h
+**/*.cpp
+**/*.hpp
+**/*.toml
+**/*.json
+**/*.yaml
+**/*.yml
+**/*.ini
+**/*.cfg
+**/*.sh
+**/*.zsh

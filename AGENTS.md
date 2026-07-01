@@ -223,3 +223,8 @@ This boilerplate synthesizes:
 - The AGENTS.md open standard (cross-tool portability via symlinks).
 
 Read once. Edit sections 10 and 11 for your project. Prune the rest over time. This file gets better the more you use it.
+
+<!-- BEGIN MANAGED AGENTS.LOCAL INSTRUCTION -->
+Also read `AGENTS.local.md` before every task when it exists; it contains
+repository-local instructions that supplement this file.
+<!-- END MANAGED AGENTS.LOCAL INSTRUCTION -->
