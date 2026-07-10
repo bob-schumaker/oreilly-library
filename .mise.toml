@@ -32,6 +32,37 @@ if [ "$(type -t set-window-title)" = "function" ]; then
     set-window-title "${MISE_PROJECT_ROOT##*/}"
 fi
 
+__dot_mise_hook_add_venv_bin() {
+    local ENV_DIR=${1:-${VIRTUAL_ENV:-}}
+    if [ -n "${ENV_DIR}" ] && [ -d "${ENV_DIR}" ]; then
+        if [ "$(type -t PATH_add)" = "function" ]; then
+            PATH_add "${ENV_DIR}/bin"
+        elif [ "$(type -t pathprepend)" = "function" ]; then
+            pathprepend "${ENV_DIR}/bin"
+        elif [[ ":${PATH}:" != *":${ENV_DIR}/bin:"* ]]; then
+            PATH="${ENV_DIR}/bin${PATH:+:${PATH}}"
+            export PATH
+        fi
+    fi
+}
+
+
+__dot_mise_hook_remove_venv_bin() {
+    local ENV_DIR=${1:-${VIRTUAL_ENV:-}}
+    if [ -n "${ENV_DIR}" ] && [ -d "${ENV_DIR}" ]; then
+        if [ "$(type -t pathremove)" = "function" ]; then
+            pathremove "${ENV_DIR}/bin"
+        elif [ -n "${PATH:-}" ]; then
+            local NEW_PATH
+            NEW_PATH=$(printf '%s
+' "${PATH}" | awk -v RS=: -v ORS=: -v target="${ENV_DIR}/bin" '$0 != target && $0 != "" { print $0 }')
+            NEW_PATH=${NEW_PATH%:}
+            PATH="${NEW_PATH}"
+            export PATH
+        fi
+    fi
+}
+
 export POETRY_ACTIVE=true
 if [ -f "${MISE_PROJECT_ROOT}/pyproject.toml" ] && command -v poetry >/dev/null 2>&1; then
     poetry env use "$(mise which python)" >/dev/null 2>&1 || true
