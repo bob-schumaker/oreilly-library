@@ -3,8 +3,8 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] [--library [<library>]] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
-    oreilly-library --check [--fetch] [--clean] [--library [<library>]] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
+    oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] [--library] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
+    oreilly-library --check [--fetch] [--clean] [--library] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
 
 Arguments:
     ISBN            Look for these books
@@ -19,7 +19,7 @@ Options:
     --check             Check tracked early-release books for updated metadata.
     --fetch             Fetch updated books found by --check and update tracking metadata.
     --clean             Run Calibre ebook-polish cleanup after building each EPUB; with --check, prune 404 tracker rows.
-    --library           Add each built EPUB to the optional library path with calibredb. If omitted, uses ~/Calibre Library/.
+    --library           Add each built EPUB to Calibre with calibredb. Use --library=PATH to select a library; defaults to ~/Calibre Library/.
     --verbose           Make some noise
     --debug             Make a lot of noise
 """
@@ -635,12 +635,22 @@ def main() -> int:
             flags=re.MULTILINE,
         )
 
+    library_path: str | None = None
+    normalized_argv = [sys.argv[0]]
+    for argument in sys.argv[1:]:
+        if argument.startswith("--library="):
+            library_path = argument.removeprefix("--library=")
+            normalized_argv.append("--library")
+        else:
+            normalized_argv.append(argument)
+    sys.argv = normalized_argv
+
     arguments = docopt(usage_doc)
     general.setup_logging(options=arguments)
     kw_args = docopt_arguments(
         arguments, all_args=True, logger=getLogger("oreilly-library")
     )
-    kw_args["library"] = arguments["<library>"] or arguments["--library"]
+    kw_args["library"] = library_path or arguments["--library"]
     app = oreilly_loader(**kw_args)
     return app.run()
 
