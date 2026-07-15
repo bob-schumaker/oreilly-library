@@ -28,8 +28,8 @@ if [ -f "${PROJECT_HISTFILE}" ]; then
     history -c && history -r "${HISTFILE}"
 fi
 
-if [ "$(type -t set-window-title)" = "function" ]; then
-    set-window-title "${MISE_PROJECT_ROOT##*/}"
+if [ "$(type -t set-both-title)" = "function" ]; then
+    set-both-title "${MISE_PROJECT_ROOT##*/}"
 fi
 
 __dot_mise_hook_add_venv_bin() {
@@ -91,8 +91,8 @@ elif [ -n "${HISTFILE}" ] && [ "${HISTFILE}" = "${PROJECT_HISTFILE}" ]; then
     unset HISTFILE
 fi
 
-if [ "$(type -t set-window-title)" = "function" ]; then
-    set-window-title
+if [ "$(type -t set-both-title)" = "function" ]; then
+    set-both-title
 fi
 
 if [ "$(type -t deactivate)" = "function" ]; then
