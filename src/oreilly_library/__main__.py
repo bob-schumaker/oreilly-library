@@ -3,8 +3,8 @@ An application to download books from the O'Reilly Safari library for local
 consumption. You will need a valid login for O'Reilly in order to do this.
 
 Usage:
-    oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
-    oreilly-library --check [--fetch] [--clean] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
+    oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] [--library [<library>]] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER] [--browser | ISBN...]
+    oreilly-library --check [--fetch] [--clean] [--library [<library>]] [--verbose] [--debug] [--output-dir=OUTPUT] [--cookie-file=FILE] [--login=BROWSER]
 
 Arguments:
     ISBN            Look for these books
@@ -19,6 +19,7 @@ Options:
     --check             Check tracked early-release books for updated metadata.
     --fetch             Fetch updated books found by --check and update tracking metadata.
     --clean             Run Calibre ebook-polish cleanup after building each EPUB; with --check, prune 404 tracker rows.
+    --library           Add each built EPUB to the optional library path with calibredb. If omitted, uses ~/Calibre Library/.
     --verbose           Make some noise
     --debug             Make a lot of noise
 """
@@ -26,6 +27,7 @@ Options:
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -53,6 +55,7 @@ from oreilly_library.early_release_tracker import (
 
 PATH = os.environ.get("SAFARIBOOKS_PATH") or "working"
 DEFAULT_CHROME_VERSION = "147.0.7727.138"
+DEFAULT_CALIBRE_LIBRARY = Path("~/Calibre Library/")
 
 
 class oreilly_loader:
@@ -67,6 +70,7 @@ class oreilly_loader:
         fetch: bool | None = None,
         clean: bool | None = None,
         build: bool | None = None,
+        library: str | bool | None = None,
         verbose: bool | None = None,
         debug: bool | None = None,
         cookie_file: Optional[str] = None,
@@ -95,6 +99,7 @@ class oreilly_loader:
         self._epubcheck = bool(epubcheck)
         self._clean = bool(clean)
         self._build = bool(build)
+        self._library = self._resolve_calibre_library(library)
         self._browser = browser
         self._verbose = bool(verbose)
         self._debug = bool(debug)
@@ -135,7 +140,8 @@ class oreilly_loader:
                 verbose=self._verbose and not self._debug,
                 debug=self._debug,
             )
-            builder.build_epub(clean=self._clean)
+            epub_path = builder.build_epub(clean=self._clean)
+            self._add_to_calibre_library(epub_path)
             self._record_local_early_release(source_dir, identifier)
             return
 
@@ -151,10 +157,49 @@ class oreilly_loader:
             verbose=self._verbose and not self._debug,
             debug=self._debug,
         )
-        downloader.download_and_build()
+        result = downloader.download_and_build()
+        self._add_to_calibre_library(result.epub_path)
 
         if downloader.book_info:
             self._sync_early_release_metadata(downloader.book_info, identifier)
+
+    @staticmethod
+    def _resolve_calibre_library(library: str | bool | None) -> Path | None:
+        """Return the requested Calibre library path, if importing was enabled."""
+
+        if not library:
+            return None
+        if library is True:
+            return DEFAULT_CALIBRE_LIBRARY.expanduser()
+        return Path(library).expanduser()
+
+    def _add_to_calibre_library(self, epub_path: Path | None) -> None:
+        """Add a built EPUB to the requested Calibre library."""
+
+        if self._library is None or epub_path is None:
+            return
+
+        source_path = epub_path
+        polished_path = epub_path.with_stem(f"{epub_path.stem}_polished")
+        if self._clean and polished_path.exists():
+            source_path = polished_path
+
+        calibredb = shutil.which("calibredb")
+        if calibredb is None:
+            macos_app_binary = Path(
+                "/Applications/calibre.app/Contents/MacOS/calibredb"
+            )
+            if macos_app_binary.exists():
+                calibredb = str(macos_app_binary)
+        if calibredb is None:
+            raise RuntimeError(
+                "--library was requested, but Calibre's calibredb executable was not found."
+            )
+
+        subprocess.run(
+            [calibredb, "--with-library", str(self._library), "add", str(source_path)],
+            check=True,
+        )
 
     def _resolve_existing_source_dir(self, identifier: str, base_dir: Path) -> Path:
         candidates: list[Path] = []
@@ -595,6 +640,7 @@ def main() -> int:
     kw_args = docopt_arguments(
         arguments, all_args=True, logger=getLogger("oreilly-library")
     )
+    kw_args["library"] = arguments["<library>"] or arguments["--library"]
     app = oreilly_loader(**kw_args)
     return app.run()
 

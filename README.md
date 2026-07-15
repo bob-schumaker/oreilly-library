@@ -72,10 +72,12 @@ Early-release tracking is stored in `~/.cache/oreilly-early-release.db`.
 
 ```text
 oreilly-library [--verbose] [--debug] [--epubcheck] [--clean] [--build] \
+                [--library [LIBRARY]] \
                 [--output-dir=OUTPUT] [--cookie-file=FILE] \
                 [--login=BROWSER] ISBN...
 
 oreilly-library --check [--fetch] [--clean] [--verbose] [--debug] \
+                [--library [LIBRARY]] \
                 [--output-dir=OUTPUT] [--cookie-file=FILE] \
                 [--login=BROWSER]
 ```
@@ -98,6 +100,10 @@ oreilly-library --check [--fetch] [--clean] [--verbose] [--debug] \
 - `--fetch`: with `--check`, download updated books and refresh tracked timestamps
 - `--clean`: run Calibre `ebook-polish` after building each EPUB; with
   `--check`, prune tracker rows whose remote metadata returns 404
+- `--library [LIBRARY]`: add each built EPUB to a Calibre library with
+  `calibredb`. A bare `--library` uses `~/Calibre Library/`; provide a path
+  with `--library /path/to/library`. When `--clean` creates a `_polished.epub`
+  sibling, that file is added instead.
 - `--verbose`: show progress messages
 - `--debug`: show detailed debug logging
 
