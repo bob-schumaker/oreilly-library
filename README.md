@@ -52,6 +52,10 @@ You can provide them in one of two ways:
 1. **Use an existing cookie file** with `--cookie-file`
 2. **Let the tool collect cookies with Selenium**
 
+Before either option is used, the CLI checks the system clipboard. If it
+contains a supported cookie JSON payload, the CLI saves it to the configured
+cookie file and uses those cookies for the current run.
+
 If no cookie file is available, the CLI opens Chrome, waits for you to log in,
 and saves the captured cookies to disk.
 

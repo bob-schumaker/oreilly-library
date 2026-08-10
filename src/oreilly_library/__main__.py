@@ -35,6 +35,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
+import pyperclip
 import requests
 from tqdm import tqdm
 
@@ -513,6 +514,14 @@ class oreilly_loader:
         return downloader.fetch_bookinfo()
 
     def _ensure_cookies(self) -> list[dict] | dict:
+        clipboard_cookies = self._load_cookies_from_clipboard()
+        if clipboard_cookies is not None:
+            self.logger.info(
+                "Found cookies in the clipboard. Updating %s.", self._cookies_file
+            )
+            self._persist_cookies(clipboard_cookies, self._cookies_file)
+            return clipboard_cookies
+
         if self._login[1]:
             self.logger.info(
                 f"--login={self._login} supplied. Launching Selenium to refresh cookies.",
@@ -530,6 +539,42 @@ class oreilly_loader:
     def _load_cookies_from_file(self, path: Path) -> list[dict] | dict:
         with path.open("r", encoding="utf-8") as fh:
             return json.load(fh)
+
+    @staticmethod
+    def _load_cookies_from_clipboard() -> list[dict] | dict | None:
+        """Return valid cookie JSON from the system clipboard, if present."""
+        try:
+            pasteboard_text = pyperclip.paste()
+        except pyperclip.PyperclipException:
+            return None
+        if not pasteboard_text.strip():
+            return None
+
+        try:
+            cookie_data = json.loads(pasteboard_text)
+        except json.JSONDecodeError:
+            return None
+
+        if isinstance(cookie_data, list):
+            if cookie_data and all(
+                isinstance(cookie, dict)
+                and isinstance(cookie.get("name"), str)
+                and isinstance(cookie.get("value"), str)
+                for cookie in cookie_data
+            ):
+                return cookie_data
+            return None
+
+        if (
+            isinstance(cookie_data, dict)
+            and cookie_data
+            and all(
+                isinstance(name, str) and isinstance(value, str)
+                for name, value in cookie_data.items()
+            )
+        ):
+            return cookie_data
+        return None
 
     def _persist_cookies(self, cookie_data: list[dict] | dict, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
