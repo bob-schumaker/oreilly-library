@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add New Books"
+  short_description: "Import preferred EPUBs into Calibre safely."
+  default_prompt: "Add new books from working/Books to my Calibre library."
