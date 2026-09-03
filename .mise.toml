@@ -1,102 +1,102 @@
+# dot-mise-managed: dot-mise-poetry
+# dot-mise-update: dot-mise-poetry --update
+# dot-mise-replace: dot-mise-poetry --force
+
 [tools]
-python = "3.14.3"
+# dot-mise-toml-tools:start -- DO NOT EDIT BETWEEN THESE COMMENTS
+python = "3.14.7"
+# dot-mise-toml-tools:end -- DO NOT EDIT BETWEEN THESE COMMENTS
 
-"pipx:poetry" = { version="latest", pyproject="{{ config_root }}/pyproject.toml" }
+# dot-mise-poetry-tools:start -- DO NOT EDIT BETWEEN THESE COMMENTS
+"pipx:poetry" = { version = "latest", pyproject = "{{ config_root }}/pyproject.toml" }
+# dot-mise-poetry-tools:end -- DO NOT EDIT BETWEEN THESE COMMENTS
 [env]
+# dot-mise-toml-env:start -- DO NOT EDIT BETWEEN THESE COMMENTS
 
+# dot-mise-toml-env:end -- DO NOT EDIT BETWEEN THESE COMMENTS
+
+# dot-mise-poetry-env:start -- DO NOT EDIT BETWEEN THESE COMMENTS
 POETRY_ACTIVE = true
 POETRY_REQUESTS_TIMEOUT = 60
 POETRY_VIRTUALENVS_IN_PROJECT = true
+# dot-mise-poetry-env:end -- DO NOT EDIT BETWEEN THESE COMMENTS
 [_.python]
+
+# dot-mise-python-venv:start -- DO NOT EDIT BETWEEN THESE COMMENTS
 venv = ".venv"
-
+# dot-mise-python-venv:end -- DO NOT EDIT BETWEEN THESE COMMENTS
 [tasks."project-update"]
-run = "bash -c 'set -e; project_update_args=(poetry update --with dev); poetry_install_args=(poetry install); poetry_install_has_extras=\"\"; skip_poetry_update_extras=\"\"; for arg in \"$@\"; do if [ \"${arg}\" = \"--sync\" ]; then skip_poetry_update_extras=1; break; fi; done; project_update_args+=(\"$@\"); \"${project_update_args[@]}\"; if [ -z \"${skip_poetry_update_extras}\" ] && [ -n \"${POETRY_UPDATE_EXTRAS:-}\" ]; then for extra in ${POETRY_UPDATE_EXTRAS//,/ }; do if [ -n \"${extra}\" ]; then poetry_install_has_extras=1; poetry_install_args+=(-E \"${extra}\"); fi; done; if [ -n \"${poetry_install_has_extras}\" ]; then \"${poetry_install_args[@]}\"; fi; fi' project-update \"$@\""
 
-# dot-mise-poetry:start
-[hooks.enter]
-shell = "bash"
-script = '''
-PROJECT_HISTFILE="${MISE_PROJECT_ROOT}/.bash_custom_history"
-if [ -f "${PROJECT_HISTFILE}" ]; then
-    if [ -n "${HISTFILE+x}" ] && [ "${HISTFILE}" != "${PROJECT_HISTFILE}" ]; then
-        export MISE_PREVIOUS_HISTFILE="${HISTFILE}"
-        export MISE_PREVIOUS_HISTFILE_SET=1
+# dot-mise-project-update-task:start -- DO NOT EDIT BETWEEN THESE COMMENTS
+run = "poetry update --with dev"
+# dot-mise-project-update-task:end -- DO NOT EDIT BETWEEN THESE COMMENTS
+
+[hooks]
+# dot-mise-enter:start -- DO NOT EDIT BETWEEN THESE COMMENTS
+enter = [
+  { shell = "bash", script = '''
+if [ -d "${MISE_PROJECT_ROOT}/.venv" ]; then
+    MISE_PROJECT_PREVIOUS_PATH="${PATH:-}"
+    export MISE_PROJECT_PREVIOUS_PATH
+    MISE_PROJECT_PREVIOUS_PATH_SET=1
+    export MISE_PROJECT_PREVIOUS_PATH_SET
+    VIRTUAL_ENV="${MISE_PROJECT_ROOT}/.venv"
+    export VIRTUAL_ENV
+    case ":${PATH:-}:" in
+        *:"${VIRTUAL_ENV}/bin":*) ;;
+        *) PATH="${VIRTUAL_ENV}/bin${PATH:+:${PATH}}"; export PATH ;;
+    esac
+    if command -v set_project_path >/dev/null 2>&1; then
+        set_project_path "${MISE_PROJECT_ROOT}" "${VIRTUAL_ENV}"
     fi
-    HISTFILE="${PROJECT_HISTFILE}"
-    export HISTFILE
-    history -c && history -r "${HISTFILE}"
 fi
-
-if [ "$(type -t set-both-title)" = "function" ]; then
-    set-both-title "${MISE_PROJECT_ROOT##*/}"
-fi
-
-__dot_mise_hook_add_venv_bin() {
-    local ENV_DIR=${1:-${VIRTUAL_ENV:-}}
-    if [ -n "${ENV_DIR}" ] && [ -d "${ENV_DIR}" ]; then
-        if [ "$(type -t PATH_add)" = "function" ]; then
-            PATH_add "${ENV_DIR}/bin"
-        elif [ "$(type -t pathprepend)" = "function" ]; then
-            pathprepend "${ENV_DIR}/bin"
-        elif [[ ":${PATH}:" != *":${ENV_DIR}/bin:"* ]]; then
-            PATH="${ENV_DIR}/bin${PATH:+:${PATH}}"
-            export PATH
-        fi
+''' },
+  { shell = "zsh", script = '''
+if [ -d "${MISE_PROJECT_ROOT}/.venv" ]; then
+    MISE_PROJECT_PREVIOUS_PATH="${PATH:-}"
+    export MISE_PROJECT_PREVIOUS_PATH
+    MISE_PROJECT_PREVIOUS_PATH_SET=1
+    export MISE_PROJECT_PREVIOUS_PATH_SET
+    VIRTUAL_ENV="${MISE_PROJECT_ROOT}/.venv"
+    export VIRTUAL_ENV
+    case ":${PATH:-}:" in
+        *:"${VIRTUAL_ENV}/bin":*) ;;
+        *) PATH="${VIRTUAL_ENV}/bin${PATH:+:${PATH}}"; export PATH ;;
+    esac
+    if command -v set_project_path >/dev/null 2>&1; then
+        set_project_path "${MISE_PROJECT_ROOT}" "${VIRTUAL_ENV}"
     fi
-}
-
-
-__dot_mise_hook_remove_venv_bin() {
-    local ENV_DIR=${1:-${VIRTUAL_ENV:-}}
-    if [ -n "${ENV_DIR}" ] && [ -d "${ENV_DIR}" ]; then
-        if [ "$(type -t pathremove)" = "function" ]; then
-            pathremove "${ENV_DIR}/bin"
-        elif [ -n "${PATH:-}" ]; then
-            local NEW_PATH
-            NEW_PATH=$(printf '%s
-' "${PATH}" | awk -v RS=: -v ORS=: -v target="${ENV_DIR}/bin" '$0 != target && $0 != "" { print $0 }')
-            NEW_PATH=${NEW_PATH%:}
-            PATH="${NEW_PATH}"
-            export PATH
-        fi
-    fi
-}
-
-export POETRY_ACTIVE=true
-if [ -f "${MISE_PROJECT_ROOT}/pyproject.toml" ] && command -v poetry >/dev/null 2>&1; then
-    poetry env use "$(mise which python)" >/dev/null 2>&1 || true
-    eval "$(poetry env activate)" >/dev/null 2>&1 || true
-    set_project_path "${MISE_PROJECT_ROOT}" "${VIRTUAL_ENV}"
 fi
-
-if [ -f "${MISE_PROJECT_ROOT}/env_setup" ]; then
-    # shellcheck disable=SC1091
-    source "${MISE_PROJECT_ROOT}/env_setup"
+''' },
+]
+# dot-mise-enter:end -- DO NOT EDIT BETWEEN THESE COMMENTS
+# dot-mise-leave:start -- DO NOT EDIT BETWEEN THESE COMMENTS
+leave = [
+  { shell = "bash", script = '''
+if [ "${MISE_PROJECT_PREVIOUS_PATH_SET:-}" = 1 ]; then
+    PATH="${MISE_PROJECT_PREVIOUS_PATH:-}"
+    export PATH
+    unset MISE_PROJECT_PREVIOUS_PATH MISE_PROJECT_PREVIOUS_PATH_SET
+elif [ -n "${VIRTUAL_ENV:-}" ]; then
+    env_tools_mise_previous_path="${PATH:-}"
+    PATH=$(printf '%s\n' "$env_tools_mise_previous_path" | awk -v RS=: -v ORS=: -v target="${VIRTUAL_ENV}/bin" '$0 != target && $0 != "" { print }')
+    PATH="${PATH%:}"
+    export PATH
 fi
-'''
-
-[hooks.leave]
-shell = "bash"
-script = '''
-PROJECT_HISTFILE="${MISE_PROJECT_ROOT}/.bash_custom_history"
-if [ -n "${HISTFILE}" ] && [ "${HISTFILE}" = "${PROJECT_HISTFILE}" ] && [ -f "${PROJECT_HISTFILE}" ]; then
-    history -a "${HISTFILE}" 2>/dev/null || history -a 2>/dev/null || true
+unset VIRTUAL_ENV
+''' },
+  { shell = "zsh", script = '''
+if [ "${MISE_PROJECT_PREVIOUS_PATH_SET:-}" = 1 ]; then
+    PATH="${MISE_PROJECT_PREVIOUS_PATH:-}"
+    export PATH
+    unset MISE_PROJECT_PREVIOUS_PATH MISE_PROJECT_PREVIOUS_PATH_SET
+elif [ -n "${VIRTUAL_ENV:-}" ]; then
+    env_tools_mise_previous_path="${PATH:-}"
+    PATH=$(printf '%s\n' "$env_tools_mise_previous_path" | awk -v RS=: -v ORS=: -v target="${VIRTUAL_ENV}/bin" '$0 != target && $0 != "" { print }')
+    PATH="${PATH%:}"
+    export PATH
 fi
-if [ -n "${MISE_PREVIOUS_HISTFILE_SET}" ]; then
-    HISTFILE="${MISE_PREVIOUS_HISTFILE}"
-    export HISTFILE
-    unset MISE_PREVIOUS_HISTFILE MISE_PREVIOUS_HISTFILE_SET
-elif [ -n "${HISTFILE}" ] && [ "${HISTFILE}" = "${PROJECT_HISTFILE}" ]; then
-    unset HISTFILE
-fi
-
-if [ "$(type -t set-both-title)" = "function" ]; then
-    set-both-title
-fi
-
-if [ "$(type -t deactivate)" = "function" ]; then
-    deactivate >/dev/null 2>&1 || true
-fi
-'''
-# dot-mise-poetry:end
+unset VIRTUAL_ENV
+''' },
+]
+# dot-mise-leave:end -- DO NOT EDIT BETWEEN THESE COMMENTS
