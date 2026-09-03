@@ -451,7 +451,7 @@ class oreilly_loader:
         remote_books: dict[str, TrackedBook] = {}
         result_messages: list[str] = []
         iterator = tracked_books
-        if len(tracked_books) > 1 and not self._verbose and not self._debug:
+        if len(tracked_books) > 1 and not self._debug:
             iterator = tqdm(tracked_books)
         for tracked in iterator:
             try:
