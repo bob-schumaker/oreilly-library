@@ -1,0 +1,4 @@
+interface:
+  display_name: "Calibre Duplicate Review"
+  short_description: "Safely review duplicate EPUBs in a Calibre library."
+  default_prompt: "Review duplicate books in my specified Calibre library."
