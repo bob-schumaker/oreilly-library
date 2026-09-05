@@ -1011,11 +1011,11 @@ class EpubBuilder:
 
         def _rewrite_href(href: str) -> str:
             api_pattern = re.compile(
-                rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+                rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:(?:book|article):{re.escape(identifier)}/files/",
                 re.IGNORECASE,
             )
             root_pattern = re.compile(
-                rf"/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+                rf"/api/v\d+/epubs/urn:orm:(?:book|article):{re.escape(identifier)}/files/",
                 re.IGNORECASE,
             )
             cleaned = api_pattern.sub("", href)
@@ -1644,11 +1644,11 @@ class EpubBuilder:
 
     def _strip_api_file_prefix(self, value: str, identifier: str) -> str:
         api_pattern = re.compile(
-            rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+            rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:(?:book|article):{re.escape(identifier)}/files/",
             re.IGNORECASE,
         )
         root_pattern = re.compile(
-            rf"/api/v\d+/epubs/urn:orm:book:{re.escape(identifier)}/files/",
+            rf"/api/v\d+/epubs/urn:orm:(?:book|article):{re.escape(identifier)}/files/",
             re.IGNORECASE,
         )
         cleaned = api_pattern.sub("", value)

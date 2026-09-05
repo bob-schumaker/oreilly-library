@@ -16,10 +16,9 @@ from oreilly_library.epub_builder import EpubBuilder
 EPUB_METADATA_URL = (
     "https://learning.oreilly.com/api/v2/metadata/?identifier={identifier}"
 )
-EPUB_API_URL = "https://learning.oreilly.com/api/v2/epubs/urn:orm:book:{identifier}/"
+EPUB_API_URL = "https://learning.oreilly.com/api/v2/epubs/{archive_urn}/"
 EPUB_CHAPTERS_URL = (
-    "https://learning.oreilly.com/api/v2/epub-chapters/"
-    "?epub_identifier=urn:orm:book:{identifier}"
+    "https://learning.oreilly.com/api/v2/epub-chapters/?epub_identifier={archive_urn}"
 )
 EPUB_HTML_SEARCH_URL = (
     "https://learning.oreilly.com/search/?q={identifier}&type=book&rows=100&language=en"
@@ -81,6 +80,7 @@ class EpubDownloader:
         self._debug = bool(debug)
         self.logger = logger or logging.getLogger(__name__)
         self.book_info: MutableMapping[str, Any] | None = None
+        self._archive_urn: str | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -107,7 +107,7 @@ class EpubDownloader:
         self._log_info("Aggregating chapter data")
         self._download_chapters()
         self._log_info("Downloading additional files")
-        self._download_files(book_info)
+        self._download_files()
         self._log_info("Ensuring cover assets")
         self._ensure_cover_assets(book_info)
 
@@ -135,7 +135,7 @@ class EpubDownloader:
     # ------------------------------------------------------------------
     @property
     def _main_api_url(self) -> str:
-        return EPUB_API_URL.format(identifier=self.identifier)
+        return EPUB_API_URL.format(archive_urn=self._require_archive_urn())
 
     @property
     def _metadata_url(self) -> str:
@@ -143,7 +143,7 @@ class EpubDownloader:
 
     @property
     def _chapters_url(self) -> str:
-        return EPUB_CHAPTERS_URL.format(identifier=self.identifier)
+        return EPUB_CHAPTERS_URL.format(archive_urn=self._require_archive_urn())
 
     @property
     def _search_url(self) -> str:
@@ -193,11 +193,15 @@ class EpubDownloader:
                 book_info.update(products[0])
         metadata = self._fetch_json(self._metadata_url)
         results = metadata.get("results")
-        if results:
-            book_info.update(results[0])
+        generic_metadata: Mapping[str, Any] = {}
+        if isinstance(results, list) and results and isinstance(results[0], Mapping):
+            generic_metadata = results[0]
+            book_info.update(generic_metadata)
+        self._archive_urn = self._resolve_archive_urn(generic_metadata)
         api_info = self._fetch_optional_json(self._main_api_url)
         if api_info:
             book_info.update(api_info)
+        book_info["ourn"] = self._require_archive_urn()
         return book_info
 
     def _download_related_documents(self, metadata: Mapping[str, Any]) -> None:
@@ -318,12 +322,8 @@ class EpubDownloader:
             )
         )
 
-    def _download_files(self, metadata: Mapping[str, Any]) -> None:
-        files_url = metadata.get("files")
-        if not isinstance(files_url, str):
-            files_url = f"{self._main_api_url}files/"
-
-        files_url += "?limit=1000"
+    def _download_files(self) -> None:
+        files_url = f"{self._main_api_url}files/?limit=1000"
         for page in self._iterate_paginated(files_url):
             self._log_debug("Processing files page from %s", files_url)
             results = page.get("results", []) or []
@@ -372,7 +372,7 @@ class EpubDownloader:
             self._log_debug("Unable to inspect cover_image %s: %s", cover_hint, exc)
 
         request_size, request_axis = self._cover_request_target(hint_dimensions)
-        book_urn = self._book_urn(metadata)
+        book_urn = self._require_archive_urn()
         candidate_targets = [(request_size, request_axis)]
         alternate_target = (
             (COVER_MIN_HEIGHT, "h") if request_axis == "w" else (COVER_MIN_WIDTH, "w")
@@ -448,11 +448,20 @@ class EpubDownloader:
 
         return None
 
-    def _book_urn(self, metadata: Mapping[str, Any]) -> str:
+    def _resolve_archive_urn(self, metadata: Mapping[str, Any]) -> str:
         urn = metadata.get("ourn")
-        if isinstance(urn, str) and urn.strip():
-            return urn.strip()
-        return f"urn:orm:book:{self.identifier}"
+        if urn is None or not isinstance(urn, str) or urn == "":
+            return f"urn:orm:book:{self.identifier}"
+
+        expected = re.compile(rf"urn:orm:(?:book|article):{re.escape(self.identifier)}")
+        if expected.fullmatch(urn):
+            return urn
+        raise ValueError(f"Invalid archive URN for {self.identifier}: {urn!r}")
+
+    def _require_archive_urn(self) -> str:
+        if self._archive_urn is None:
+            raise RuntimeError("Archive URN has not been resolved from metadata.")
+        return self._archive_urn
 
     def _local_cover_document_path(self) -> Optional[Path]:
         xhtml_dir = self.destination / "xhtml"
@@ -772,13 +781,13 @@ class EpubDownloader:
             text_body = text_body.replace("{prefix}//", prefix)
 
         api_pattern = re.compile(
-            rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:book:{re.escape(self.identifier)}/files/",
+            rf"https?://[^'\"]*/api/v\d+/epubs/urn:orm:(?:book|article):{re.escape(self.identifier)}/files/",
             re.IGNORECASE,
         )
         text_body = api_pattern.sub(prefix, text_body)
 
         api_root_pattern = re.compile(
-            rf"/api/v\d+/epubs/urn:orm:book:{re.escape(self.identifier)}/files/",
+            rf"/api/v\d+/epubs/urn:orm:(?:book|article):{re.escape(self.identifier)}/files/",
             re.IGNORECASE,
         )
         text_body = api_root_pattern.sub(prefix, text_body)
