@@ -16,7 +16,11 @@ established Calibre records unless their existing EPUB is an early-access editio
    `_polished.epub` when present; otherwise select its other EPUB. Never import
    both variants.
 3. Query `calibredb` against `~/Calibre Library` for the selected book title
-   before importing. Use the absolute executable when necessary:
+   before importing. Always run this and every subsequent command that accesses
+   the Calibre library with elevated filesystem permission (`require_escalated`
+   for Codex shell commands): Calibre creates a case-sensitivity probe in the
+   library even for a read-only query. Use the absolute executable when
+   necessary:
 
    ```sh
    /Applications/calibre.app/Contents/MacOS/calibredb \
@@ -25,7 +29,8 @@ established Calibre records unless their existing EPUB is an early-access editio
      --search 'title:"Exact Title"'
    ```
 
-4. Import based on the query result:
+4. Import based on the query result. Always run `calibredb add` commands with
+   elevated filesystem permission:
 
    - No matching record: run `calibredb add` for the selected EPUB.
    - Matching record marked `early access` or `early release` in its tags or
@@ -39,8 +44,9 @@ established Calibre records unless their existing EPUB is an early-access editio
 6. Delete only the top-level `working/Books/<book folder>` directories for
    successful additions or early-access replacements. Preserve folders for
    skipped duplicates and failures.
-7. List the remaining directories in `working/Books` and report added,
-   replaced, skipped, failed, and removed folders.
+7. Verify each added or merged record with an elevated `calibredb` query. List
+   the remaining directories in `working/Books` and report added, replaced,
+   skipped, failed, and removed folders.
 
 ## Safety
 
@@ -50,3 +56,5 @@ established Calibre records unless their existing EPUB is an early-access editio
 - If Calibre reports a database lock, ask the user to close Calibre and retry;
   do not delete any folders.
 - Treat `early access` and `early release` case-insensitively in tags and comments.
+- Request elevation before every `calibredb` command, including queries and
+  final verification; do not first attempt an unprivileged library access.
